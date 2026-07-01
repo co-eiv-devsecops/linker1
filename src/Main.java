@@ -43,6 +43,15 @@ public class Main {
                 return;
             }
 
+            try (var ps = conn.prepareStatement("SELECT id FROM shorturl WHERE url = ?")) {
+                ps.setString(1, url);
+                var rs = ps.executeQuery();
+                if (rs.next()) {
+                    ctx.status(200).header("Location", "/" + rs.getString("id")).result(rs.getString("id"));
+                    return;
+                }
+            }
+
             var id = generateId();
             try (var ps = conn.prepareStatement("INSERT INTO shorturl (id, url) VALUES (?, ?)")) {
                 ps.setString(1, id);
