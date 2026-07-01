@@ -5,6 +5,7 @@ REPO_URL="${1:-${REPO_URL:-}}"
 REPO_DIR="linker1"
 APP_DIR="/opt/linker1"
 DB_DIR="/var/lib/linker1"
+WEB_DIR="/var/www/linker1"
 
 if [ -z "$REPO_URL" ]; then
   echo "Uso: bash deploy.sh <REPO_URL>"
@@ -20,12 +21,13 @@ sudo apt upgrade -y
 
 # 2. Instalar dependencias
 echo "✓ Installing dependencies..."
-sudo apt install -y git maven openjdk-21-jdk
+sudo apt install -y git maven openjdk-21-jdk nginx
 
 # 3. Crear directorios
 echo "✓ Creating directories..."
 sudo mkdir -p "$APP_DIR"
 sudo mkdir -p "$DB_DIR"
+sudo mkdir -p "$WEB_DIR"
 
 # 4. Clonar repo
 if [ ! -d "$REPO_DIR/.git" ]; then
@@ -55,12 +57,12 @@ sudo cp "$JAR_FILE" "$APP_DIR/linker1.jar"
 sudo chown -R ubuntu:ubuntu "$APP_DIR"
 sudo chown -R ubuntu:ubuntu "$DB_DIR"
 
+# 6. Frontend
 echo "✓ Deploying frontend..."
-sudo mkdir -p /var/www/linker1
-sudo cp -r public/* /var/www/linker1/
-sudo chown -R ubuntu:ubuntu /var/www/linker1
+sudo cp -r public/* "$WEB_DIR/"
+sudo chown -R www-data:www-data "$WEB_DIR"
 
-# 6. Systemd service (8080 IMPORTANT)
+# 7. Systemd service
 echo "✓ Creating systemd service..."
 sudo tee /etc/systemd/system/linker1.service > /dev/null <<EOF
 [Unit]
@@ -81,16 +83,53 @@ Environment="LINKER_DB_PATH=$DB_DIR/linker1.db"
 WantedBy=multi-user.target
 EOF
 
-# 7. Reload systemd
+# 8. NGINX CONFIG (FIXED)
+echo "✓ Configuring Nginx..."
+sudo rm -f /etc/nginx/sites-enabled/default
+
+sudo tee /etc/nginx/sites-available/linker1 > /dev/null <<EOF
+server {
+    listen 80;
+    server_name 1.n-la-c.app;
+
+    root $WEB_DIR;
+    index index.html;
+
+    location / {
+        try_files \$uri \$uri/ /index.html;
+    }
+
+    location /link {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    }
+
+    location ~ ^/[A-Za-z0-9_-]+$ {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    }
+}
+EOF
+
+sudo ln -sf /etc/nginx/sites-available/linker1 /etc/nginx/sites-enabled/linker1
+sudo nginx -t
+
+# 9. Restart services
 echo "✓ Reloading systemd..."
 sudo systemctl daemon-reload
 sudo systemctl enable linker1.service
 
-# 8. Restart app
-echo "✓ Starting service..."
+echo "✓ Starting services..."
 sudo systemctl restart linker1.service
+sudo systemctl restart nginx
 
-# 9. Status
+# 10. Status
 echo ""
 echo "=== SERVICE STATUS ==="
 sudo systemctl status linker1.service --no-pager
