@@ -17,15 +17,9 @@ public class Main {
             System.getenv().getOrDefault("LINKER_PORT", "8080")
         );
 
-        var app = Javalin.create(config -> {
-            config.staticFiles.add(staticFiles -> {
-                staticFiles.hostedPath = "/";
-                staticFiles.directory = "/var/www/linker1";
-                staticFiles.location = Location.EXTERNAL;
-            });
-        }).start(port);
+        var app = Javalin.create().start(port);
 
-        app.get("/", ctx -> ctx.redirect("/index.html"));
+        app.get("/", ctx -> ctx.result("Linker1 OK"));
 
         app.get("/{id}", ctx -> {
             var id = ctx.pathParam("id");

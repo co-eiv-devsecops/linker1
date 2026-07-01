@@ -89,30 +89,15 @@ sudo rm -f /etc/nginx/sites-enabled/default
 
 sudo tee /etc/nginx/sites-available/linker1 > /dev/null <<EOF
 server {
-    listen 80;
-    server_name 1.n-la-c.app;
-
-    root $WEB_DIR;
-    index index.html;
+    listen 80 default_server;
+    server_name _;
 
     location / {
-        try_files \$uri \$uri/ /index.html;
-    }
-
-    location /link {
         proxy_pass http://127.0.0.1:8080;
-        proxy_http_version 1.1;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-    }
-
-    location ~ ^/[A-Za-z0-9_-]+$ {
-        proxy_pass http://127.0.0.1:8080;
-        proxy_http_version 1.1;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
 EOF
