@@ -2,10 +2,16 @@
 set -euo pipefail
 
 REPO_URL="${1:-${REPO_URL:-}}"
-REPO_DIR="linker1"
+WORKDIR="$(pwd)"
 APP_DIR="/opt/linker1"
 DB_DIR="/var/lib/linker1"
 WEB_DIR="/var/www/linker1"
+
+if [ -f "$WORKDIR/pom.xml" ] && [ -d "$WORKDIR/src" ]; then
+  REPO_DIR="$WORKDIR"
+else
+  REPO_DIR="$WORKDIR/linker1"
+fi
 
 if [ -z "$REPO_URL" ]; then
   echo "Uso: bash deploy.sh <REPO_URL>"
@@ -29,13 +35,20 @@ sudo mkdir -p "$APP_DIR"
 sudo mkdir -p "$DB_DIR"
 sudo mkdir -p "$WEB_DIR"
 
-# 4. Clonar repo
-if [ ! -d "$REPO_DIR/.git" ]; then
-  echo "✓ Cloning repo..."
-  git clone "$REPO_URL" "$REPO_DIR"
+# 4. Preparar fuente
+if [ "$REPO_DIR" = "$WORKDIR" ]; then
+  echo "✓ Using current repository directory..."
+  if [ -d "$REPO_DIR/.git" ]; then
+    git -C "$REPO_DIR" pull --ff-only
+  fi
 else
-  echo "✓ Updating repo..."
-  git -C "$REPO_DIR" pull --ff-only
+  if [ ! -d "$REPO_DIR/.git" ]; then
+    echo "✓ Cloning repo..."
+    git clone "$REPO_URL" "$REPO_DIR"
+  else
+    echo "✓ Updating repo..."
+    git -C "$REPO_DIR" pull --ff-only
+  fi
 fi
 
 cd "$REPO_DIR"
@@ -123,6 +136,6 @@ echo ""
 echo "=== DONE ==="
 echo "App running on: PORT 8080"
 echo "Local test: curl http://localhost:8080"
-echo "Public test: http://1.n-la-c.app"
+echo "Public test: http://1.n-la-c.app:8080"
 echo ""
 echo "Logs: sudo journalctl -u linker1.service -f"
