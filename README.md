@@ -59,7 +59,7 @@ https://1.n-la-c.app/
 ```
 Así:
 
-![alt text](doc\image.png)
+![alt text](doc/image.png)
 
 
 ## Estructura del Proyecto
