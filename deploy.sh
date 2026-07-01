@@ -12,7 +12,6 @@ REPO_URL="${1:-${REPO_URL:-}}"
 REPO_DIR="${REPO_DIR:-linker1}"
 APP_DIR="/opt/linker1"
 DB_DIR="/var/lib/linker1"
-WEB_DIR="/var/www/linker1"
 
 if [ -z "$REPO_URL" ]; then
 	echo "Debes indicar la URL del repositorio Git."
@@ -36,7 +35,6 @@ sudo apt install -y git maven openjdk-21-jdk
 echo "✓ Creando directorios..."
 sudo mkdir -p "$APP_DIR"
 sudo mkdir -p "$DB_DIR"
-sudo mkdir -p "$WEB_DIR"
 
 # 4. Clonar o actualizar el repositorio
 if [ ! -d "$REPO_DIR/.git" ]; then
@@ -63,16 +61,7 @@ sudo cp "$JAR_FILE" "$APP_DIR/linker1.jar"
 sudo chown -R $(whoami):$(whoami) "$APP_DIR"
 sudo chown -R $(whoami):$(whoami) "$DB_DIR"
 
-# 6. Publicar archivos estáticos del front
-if [ -d public ]; then
-	echo "✓ Publicando front estático..."
-	sudo cp -r public/* "$WEB_DIR/"
-	sudo chown -R www-data:www-data "$WEB_DIR"
-else
-	echo "✓ No se encontró carpeta public; se omite el front estático."
-fi
-
-# 7. Crear archivo de servicio systemd
+# 6. Crear archivo de servicio systemd
 echo "✓ Creando servicio systemd..."
 sudo tee /etc/systemd/system/linker1.service > /dev/null <<EOF
 [Unit]
@@ -93,63 +82,16 @@ Environment="LINKER_DB_PATH=$DB_DIR/linker1.db"
 WantedBy=multi-user.target
 EOF
 
-# 8. Configurar Nginx como reverse proxy
-echo "✓ Configurando Nginx..."
-sudo apt install -y nginx
-sudo rm -f /etc/nginx/sites-enabled/default
-sudo tee /etc/nginx/sites-available/linker1 > /dev/null <<EOF
-server {
-	listen 80;
-	server_name 1.n-la-c.app;
-
-	root $WEB_DIR;
-	index index.html;
-
-	location = / {
-		try_files /index.html =404;
-	}
-
-	location /app.js {
-		try_files \$uri =404;
-	}
-
-	location /styles.css {
-		try_files \$uri =404;
-	}
-
-	location /link {
-		proxy_pass http://127.0.0.1:8000;
-		proxy_http_version 1.1;
-		proxy_set_header Host \$host;
-		proxy_set_header X-Real-IP \$remote_addr;
-		proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-		proxy_set_header X-Forwarded-Proto \$scheme;
-	}
-
-	location ~ ^/[A-Za-z0-9_-]+$ {
-		proxy_pass http://127.0.0.1:8000;
-		proxy_http_version 1.1;
-		proxy_set_header Host \$host;
-		proxy_set_header X-Real-IP \$remote_addr;
-		proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-		proxy_set_header X-Forwarded-Proto \$scheme;
-	}
-}
-EOF
-sudo ln -sf /etc/nginx/sites-available/linker1 /etc/nginx/sites-enabled/linker1
-sudo nginx -t
-
-# 9. Recargar systemd y habilitar el servicio
+# 7. Recargar systemd y habilitar el servicio
 echo "✓ Habilitando servicio..."
 sudo systemctl daemon-reload
 sudo systemctl enable linker1.service
 
-# 10. Iniciar la aplicación y Nginx
+# 8. Iniciar la aplicación
 echo "✓ Iniciando aplicación..."
 sudo systemctl start linker1.service
-sudo systemctl restart nginx
 
-# 11. Verificar estado
+# 9. Verificar estado
 echo ""
 echo "=== Estado del servicio ==="
 sudo systemctl status linker1.service --no-pager
@@ -160,7 +102,5 @@ echo "  - Compilado en la VM con Maven"
 echo "  - Repositorio: $REPO_URL"
 echo "  - App escuchando en puerto 8000"
 echo "  - Base de datos en: $DB_DIR/linker1.db"
-echo "  - Front estático en: $WEB_DIR"
-echo "  - Nginx expone: http://1.n-la-c.app/"
 echo "  - Logs: sudo journalctl -u linker1.service -f"
 echo "  - Reiniciar: sudo systemctl restart linker1.service"
