@@ -1,6 +1,5 @@
 import io.javalin.Javalin;
 import io.javalin.http.HttpStatus;
-import io.javalin.http.staticfiles.Location;
 import java.sql.*;
 import java.net.URI;
 import java.util.Map;
@@ -17,15 +16,47 @@ public class Main {
             System.getenv().getOrDefault("LINKER_PORT", "8080")
         );
 
-        var app = Javalin.create(config -> {
-            config.staticFiles.add(staticFiles -> {
-                staticFiles.hostedPath = "/";
-                staticFiles.directory = "/";
-                staticFiles.location = Location.CLASSPATH;
-            });
-        }).start(port);
+        var app = Javalin.create().start(port);
 
-        app.get("/", ctx -> ctx.redirect("/index.html"));
+        app.get("/", ctx -> {
+            try {
+                var resource = Main.class.getResourceAsStream("/index.html");
+                if (resource != null) {
+                    String html = new String(resource.readAllBytes());
+                    ctx.html(html);
+                } else {
+                    ctx.status(404).result("index.html not found");
+                }
+            } catch (Exception e) {
+                ctx.status(500).result("Error reading index.html: " + e.getMessage());
+            }
+        });
+
+        app.get("/app.js", ctx -> {
+            try {
+                var resource = Main.class.getResourceAsStream("/app.js");
+                if (resource != null) {
+                    ctx.contentType("application/javascript").result(new String(resource.readAllBytes()));
+                } else {
+                    ctx.status(404).result("app.js not found");
+                }
+            } catch (Exception e) {
+                ctx.status(500).result("Error reading app.js");
+            }
+        });
+
+        app.get("/styles.css", ctx -> {
+            try {
+                var resource = Main.class.getResourceAsStream("/styles.css");
+                if (resource != null) {
+                    ctx.contentType("text/css").result(new String(resource.readAllBytes()));
+                } else {
+                    ctx.status(404).result("styles.css not found");
+                }
+            } catch (Exception e) {
+                ctx.status(500).result("Error reading styles.css");
+            }
+        });
 
         app.get("/{id}", ctx -> {
             var id = ctx.pathParam("id");
