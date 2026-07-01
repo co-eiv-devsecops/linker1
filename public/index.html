@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Linker</title>
+    <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+    <main class="shell">
+        <section class="hero">
+            <p class="eyebrow">Linker monolito</p>
+            <h1>Acorta enlaces sin salir de la misma app.</h1>
+            <p class="lede">
+                Una interfaz simple en archivos estáticos con JavaScript, servida por el mismo backend Java.
+            </p>
+        </section>
+
+        <section class="card">
+            <form id="link-form" class="form">
+                <label for="url">URL original</label>
+                <div class="input-row">
+                    <input id="url" name="url" type="url" placeholder="https://ejemplo.com/articulo" autocomplete="off" required />
+                    <button type="submit">Acortar</button>
+                </div>
+            </form>
+
+            <div id="message" class="message" aria-live="polite"></div>
+
+            <div id="result" class="result hidden">
+                <div>
+                    <p class="result-label">Tu enlace corto</p>
+                    <a id="short-link" href="#" target="_blank" rel="noreferrer"></a>
+                </div>
+                <button id="copy-btn" type="button">Copiar</button>
+            </div>
+        </section>
+
+        <section class="card subtle">
+            <h2>Cómo funciona</h2>
+            <ol>
+                <li>Ingresa una URL válida.</li>
+                <li>El backend la guarda en SQLite.</li>
+                <li>La UI muestra el enlace corto y permite copiarlo.</li>
+            </ol>
+        </section>
+    </main>
+
+    <script src="/app.js"></script>
+</body>
+</html>

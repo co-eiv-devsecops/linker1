@@ -1,7 +1,10 @@
 import io.javalin.Javalin;
 import io.javalin.http.HttpStatus;
+import java.io.InputStream;
+import java.io.UncheckedIOException;
 import java.sql.*;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.UUID;
 
@@ -14,7 +17,11 @@ public class Main {
 
         var app = Javalin.create().start(8000);
 
-        app.get("/{id}", ctx -> {
+        app.get("/", ctx -> ctx.html(loadResource("index.html")));
+        app.get("/styles.css", ctx -> ctx.contentType("text/css").result(loadResource("styles.css")));
+        app.get("/app.js", ctx -> ctx.contentType("application/javascript").result(loadResource("app.js")));
+
+        app.get("/s/{id}", ctx -> {
             var id = ctx.pathParam("id");
             try (var ps = conn.prepareStatement("SELECT url FROM shorturl WHERE id = ?")) {
                 ps.setString(1, id);
@@ -80,5 +87,16 @@ public class Main {
 
     static String generateId() {
         return UUID.randomUUID().toString().substring(0, 8);
+    }
+
+    static String loadResource(String name) {
+        try (InputStream inputStream = Main.class.getClassLoader().getResourceAsStream(name)) {
+            if (inputStream == null) {
+                throw new IllegalStateException("Missing resource: " + name);
+            }
+            return new String(inputStream.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (java.io.IOException e) {
+            throw new UncheckedIOException(e);
+        }
     }
 }
