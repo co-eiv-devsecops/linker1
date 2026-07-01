@@ -55,6 +55,11 @@ sudo cp "$JAR_FILE" "$APP_DIR/linker1.jar"
 sudo chown -R ubuntu:ubuntu "$APP_DIR"
 sudo chown -R ubuntu:ubuntu "$DB_DIR"
 
+echo "✓ Deploying frontend..."
+sudo mkdir -p /var/www/linker1
+sudo cp -r public/* /var/www/linker1/
+sudo chown -R ubuntu:ubuntu /var/www/linker1
+
 # 6. Systemd service (8080 IMPORTANT)
 echo "✓ Creating systemd service..."
 sudo tee /etc/systemd/system/linker1.service > /dev/null <<EOF

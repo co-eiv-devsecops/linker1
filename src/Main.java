@@ -1,5 +1,6 @@
 import io.javalin.Javalin;
 import io.javalin.http.HttpStatus;
+import io.javalin.http.staticfiles.Location;
 import java.sql.*;
 import java.net.URI;
 import java.util.Map;
@@ -16,7 +17,15 @@ public class Main {
             System.getenv().getOrDefault("LINKER_PORT", "8080")
         );
 
-        var app = Javalin.create().start(port);
+        var app = Javalin.create(config -> {
+            config.staticFiles.add(staticFiles -> {
+                staticFiles.hostedPath = "/";
+                staticFiles.directory = "/var/www/linker1";
+                staticFiles.location = Location.EXTERNAL;
+            });
+        }).start(port);
+
+        app.get("/", ctx -> ctx.redirect("/index.html"));
 
         app.get("/{id}", ctx -> {
             var id = ctx.pathParam("id");
