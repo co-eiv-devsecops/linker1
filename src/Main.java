@@ -1,6 +1,5 @@
 import io.javalin.Javalin;
 import io.javalin.http.HttpStatus;
-import io.javalin.http.staticfiles.Location;
 import java.sql.*;
 import java.net.URI;
 import java.util.Map;
@@ -13,15 +12,11 @@ public class Main {
             stmt.execute("CREATE TABLE IF NOT EXISTS shorturl (id TEXT PRIMARY KEY, url TEXT)");
         }
 
-        var app = Javalin.create(config -> {
-            config.staticFiles.add(staticFiles -> {
-                staticFiles.hostedPath = "/";
-                staticFiles.directory = "/";
-                staticFiles.location = Location.CLASSPATH;
-            });
-        }).start(8000);
+        int port = Integer.parseInt(
+            System.getenv().getOrDefault("LINKER_PORT", "8080")
+        );
 
-        app.get("/", ctx -> ctx.redirect("/index.html"));
+        var app = Javalin.create().start(port);
 
         app.get("/{id}", ctx -> {
             var id = ctx.pathParam("id");
