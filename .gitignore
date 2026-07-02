@@ -5,7 +5,7 @@ target/
 *.log
 /.vscode/
 
-iac/terraform.tfvars
-iac/.terraform/
-iac/*.tfstate
-iac/*.tfstate.backup
+infra/terraform.tfvars
+infra/.terraform/
+infra/*.tfstate
+infra/*.tfstate.backup

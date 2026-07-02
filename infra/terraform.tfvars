@@ -1,6 +1,0 @@
-region         = "sa-bogota-1"
-compartment_id = "ocid1.compartment.oc1..aaaaaaaakwaob2ec4asepillqoiqk3r74sqi3s5tgtwqijwisheb53fb2kxq"
-subnet_id      = "ocid1.subnet.oc1.sa-bogota-1.aaaaaaaaphqbetw2anb3d43gtw7uelu5tim5wun4xxpabuvk3qwl5puzygeq"
-image_id       = "ocid1.image.oc1.sa-bogota-1.aaaaaaaaw7eyundl5ujyif7fvp7fvruy4eijcxygmo64nx6imaygskhmndla"
-repo_url       = "https://github.com/co-eiv-devsecops/linker1"
-ssh_public_key = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC+ldlaHgCnLj4XXY9hbylo2e+gxVvFAbp9qgaAiR6WNI+3wGkdMOJU8zRJSoSAsUMwe8qhkzLIvFxkwD/9FZeDH6WxdYDjo/j/okLlbrLn2VUABWdDGxWqZOiO4fzrZSKLgT8btngy5w21oapEn3OvbeL3u08WraZVASpkfRTd3fphdma6fRP3/JO1Xb9otWfJ0SKUy+EQpowUMI0BzR35RCvwlOZNvKuNt6PFJsmgWGxCBXXgoGLReZYTBi7P1TN3b5LDZpW9kd7CTIUUZvtYnLevsvfagC/CV73YjtHyvBYKgZIrERnXMT6vJEtXg3GTenBh8murYMCayDuTga95"
