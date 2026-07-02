@@ -61,7 +61,7 @@ Además del despliegue manual con `deploy.sh`, el proyecto incluye infraestructu
 
 **Uso:**
 ```bash
-cd iac
+cd infra
 cp terraform.tfvars.example terraform.tfvars
 # Completa terraform.tfvars con tus valores (compartment_id, subnet_id, image_id, ssh_public_key)
 terraform init
