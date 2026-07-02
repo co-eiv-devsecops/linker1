@@ -1,0 +1,118 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test-package:
+    name: Build, test, and smoke test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Show build context
+        run: |
+          echo "Paso 1 terminado: repositorio listo"
+          java -version
+          mvn -version
+
+      - name: Compile and run unit tests
+        run: |
+          mvn -B -ntp clean test
+          echo "Paso 2 terminado: build y tests unitarios completados"
+
+      - name: Package application
+        run: |
+          mvn -B -ntp package -DskipTests
+          echo "Paso 3 terminado: artefacto empaquetado"
+
+      - name: Start application for smoke tests
+        run: |
+          mkdir -p target/logs
+          nohup env LINKER_PORT=18080 java -jar target/linker1-1.0-jar-with-dependencies.jar > target/logs/app.log 2>&1 &
+          echo $! > target/app.pid
+          echo "Paso 4 terminado: aplicación iniciada en segundo plano"
+
+      - name: Wait for application to become healthy
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18080/ >/dev/null; then
+              echo "Paso 5 terminado: aplicación respondió correctamente"
+              exit 0
+            fi
+            sleep 2
+          done
+
+          echo "La aplicación no respondió a tiempo"
+          cat target/logs/app.log
+          exit 1
+
+      - name: Smoke test static assets and short link flow
+        run: |
+          curl -fsS http://127.0.0.1:18080/ >/dev/null
+          curl -fsS http://127.0.0.1:18080/app.js >/dev/null
+          curl -fsS http://127.0.0.1:18080/styles.css >/dev/null
+
+          response_headers=$(mktemp)
+          response_body=$(mktemp)
+
+          curl -fsS -D "$response_headers" -o "$response_body" \
+            -X POST \
+            -H 'Content-Type: application/x-www-form-urlencoded' \
+            --data 'url=https://example.com' \
+            http://127.0.0.1:18080/link
+
+          short_id=$(cat "$response_body")
+          if [ ${#short_id} -ne 8 ]; then
+            echo "Unexpected short id: $short_id"
+            cat target/logs/app.log
+            exit 1
+          fi
+
+          location_header=$(grep -i '^Location:' "$response_headers" | tail -n 1 | tr -d '\r' | awk '{print $2}')
+          expected_location="/$(cat "$response_body")"
+          if [ "$location_header" != "$expected_location" ]; then
+            echo "Unexpected Location header: $location_header"
+            cat target/logs/app.log
+            exit 1
+          fi
+
+          redirect_code=$(curl -fsSI -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/$short_id)
+          if [ "$redirect_code" != "301" ]; then
+            echo "Unexpected redirect code: $redirect_code"
+            cat target/logs/app.log
+            exit 1
+          fi
+
+          echo "Paso 6 terminado: smoke test completo"
+
+      - name: Show application log on success
+        if: always()
+        run: |
+          if [ -f target/logs/app.log ]; then
+            tail -n 200 target/logs/app.log
+          fi
+
+      - name: Cleanup background process
+        if: always()
+        run: |
+          if [ -f target/app.pid ]; then
+            kill "$(cat target/app.pid)" || true
+          fi
