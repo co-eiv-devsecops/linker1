@@ -60,14 +60,11 @@ public class Main {
 
         app.get("/{id}", ctx -> {
             var id = ctx.pathParam("id");
-            try (var ps = conn.prepareStatement("SELECT url FROM shorturl WHERE id = ?")) {
-                ps.setString(1, id);
-                var rs = ps.executeQuery();
-                if (rs.next()) {
-                    ctx.redirect(rs.getString("url"), HttpStatus.MOVED_PERMANENTLY);
-                } else {
-                    ctx.status(404).result("Not found");
-                }
+            var url = findUrlById(conn, id);
+            if (url != null) {
+                ctx.redirect(url, HttpStatus.MOVED_PERMANENTLY);
+            } else {
+                ctx.status(404).result("Not found");
             }
         });
 
@@ -87,21 +84,13 @@ public class Main {
                 return;
             }
 
-            try (var ps = conn.prepareStatement("SELECT id FROM shorturl WHERE url = ?")) {
-                ps.setString(1, url);
-                var rs = ps.executeQuery();
-                if (rs.next()) {
-                    ctx.status(200).header("Location", "/" + rs.getString("id")).result(rs.getString("id"));
-                    return;
-                }
+            var existing = findIdByUrl(conn, url);
+            if (existing != null) {
+                ctx.status(200).header("Location", "/" + existing).result(existing);
+                return;
             }
 
-            var id = generateId();
-            try (var ps = conn.prepareStatement("INSERT INTO shorturl (id, url) VALUES (?, ?)")) {
-                ps.setString(1, id);
-                ps.setString(2, url);
-                ps.executeUpdate();
-            }
+            var id = insertShortUrl(conn, url);
             ctx.status(201).header("Location", "/" + id).result(id);
         });
 
@@ -124,5 +113,37 @@ public class Main {
 
     static String generateId() {
         return UUID.randomUUID().toString().substring(0, 8);
+    }
+
+    static String findUrlById(Connection conn, String id) throws SQLException {
+        try (var ps = conn.prepareStatement("SELECT url FROM shorturl WHERE id = ?")) {
+            ps.setString(1, id);
+            var rs = ps.executeQuery();
+            if (rs.next()) {
+                return rs.getString("url");
+            }
+            return null;
+        }
+    }
+
+    static String findIdByUrl(Connection conn, String url) throws SQLException {
+        try (var ps = conn.prepareStatement("SELECT id FROM shorturl WHERE url = ?")) {
+            ps.setString(1, url);
+            var rs = ps.executeQuery();
+            if (rs.next()) {
+                return rs.getString("id");
+            }
+            return null;
+        }
+    }
+
+    static String insertShortUrl(Connection conn, String url) throws SQLException {
+        var id = generateId();
+        try (var ps = conn.prepareStatement("INSERT INTO shorturl (id, url) VALUES (?, ?)")) {
+            ps.setString(1, id);
+            ps.setString(2, url);
+            ps.executeUpdate();
+        }
+        return id;
     }
 }
