@@ -51,6 +51,29 @@ Este script:
 - Inicia Nginx como reverse proxy
 - Expone la aplicación en puerto 8080
 
+### 5. Paridad de entornos (IaC)
+
+Además del despliegue manual con `deploy.sh`, el proyecto incluye infraestructura como código en `infra/` usando Terraform, que permite crear una VM nueva con todo lo necesario para correr Linker1 de forma reproducible.
+
+**Qué crea:** una instancia compute en OCI (misma subnet y compartment del equipo), configurada automáticamente vía cloud-init: instala Java 21, Maven, Nginx, clona el repo, compila y deja el servicio corriendo — sin pasos manuales.
+
+**Requisitos:** Terraform >= 1.5, acceso a OCI (vía OCI Cloud Shell, que ya viene autenticado).
+
+**Uso:**
+```bash
+cd iac
+cp terraform.tfvars.example terraform.tfvars
+# Completa terraform.tfvars con tus valores (compartment_id, subnet_id, image_id, ssh_public_key)
+terraform init
+terraform plan
+terraform apply
+```
+
+**Destruir el entorno:**
+```bash
+terraform destroy
+```
+
 ### Verificar que está funcionando
 
 Debería verse la página estática en la URL:
@@ -66,6 +89,13 @@ Así:
 
 ```
 linker1/
+├── iac/                    # Infraestructura como código (Terraform)
+│   ├── main.tf
+│   ├── variables.tf
+│   ├── provider.tf
+│   ├── outputs.tf
+│   ├── cloud-init.yaml
+│   └── terraform.tfvars.example
 ├── src/Main.java           # Backend con rutas API
 ├── public/                 # Frontend estático
 │   ├── index.html         # Interfaz web

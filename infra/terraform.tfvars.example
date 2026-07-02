@@ -1,0 +1,6 @@
+region         = "sa-bogota-1"
+compartment_id = "ocid1.compartment.oc1..xxxxxxxx"
+subnet_id      = "ocid1.subnet.oc1.sa-bogota-1.xxxxxxxx"
+image_id       = "ocid1.image.oc1.sa-bogota-1.xxxxxxxx"
+repo_url       = "https://github.com/co-eiv-devsecops/linker1"
+ssh_public_key = "ssh-rsa AAAA..."

@@ -4,3 +4,8 @@ target/
 *.jar
 *.log
 /.vscode/
+
+iac/terraform.tfvars
+iac/.terraform/
+iac/*.tfstate
+iac/*.tfstate.backup
