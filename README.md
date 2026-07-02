@@ -15,6 +15,76 @@ Linker1 es una aplicación web que permite:
 - **Maven 3.7+**
 - **Git**
 
+## Instalación y Ejecución en la VM
+
+### 1. Clonar el repositorio
+```bash
+git clone <repo-url>
+cd linker1
+```
+
+### 2. Compilar el proyecto
+```bash
+mvn clean package
+```
+
+### 3. Ejecutar la aplicación
+```bash
+java -jar target/linker1-1.0-jar-with-dependencies.jar
+```
+
+La aplicación estará disponible en `http://localhost:8080`
+
+### 4. Despliegue
+
+Se creó el script para poder desplegar de manera más sencilla, lo único necesario es tener el repo clonado en la VM y usar el comando:
+
+```bash
+bash deploy.sh
+```
+
+Este script:
+- Hace pull de los cambios del repo
+- Instala dependencias (Java, Maven, Nginx)
+- Compila el proyecto
+- Configura el servicio systemd
+- Inicia Nginx como reverse proxy
+- Expone la aplicación en puerto 8080
+
+### 5. Paridad de entornos (IaC)
+
+Además del despliegue manual con `deploy.sh`, el proyecto incluye infraestructura como código en `infra/` usando Terraform, que permite crear una VM nueva con todo lo necesario para correr Linker1 de forma reproducible.
+
+**Qué crea:** una instancia compute en OCI (misma subnet y compartment del equipo), configurada automáticamente vía cloud-init: instala Java 21, Maven, Nginx, clona el repo, compila y deja el servicio corriendo — sin pasos manuales.
+
+**Requisitos:** Terraform >= 1.5, acceso a OCI (vía OCI Cloud Shell, que ya viene autenticado).
+
+**Uso:**
+```bash
+cd infra
+cp terraform.tfvars.example terraform.tfvars
+# Completa terraform.tfvars con tus valores (compartment_id, subnet_id, image_id, ssh_public_key)
+terraform init
+terraform plan
+terraform apply
+```
+
+**Destruir el entorno:**
+```bash
+terraform destroy
+```
+---
+### Verificar que está funcionando
+
+Debería verse la página estática en la URL:
+```bash
+https://1.n-la-c.app/
+```
+Así:
+
+![alt text](doc/image.png)
+
+
 ## Ejecución con Dev Container (Visual Studio Code)
 
 Como alternativa a la instalación local, el proyecto puede ejecutarse utilizando un **Dev Container**. Esta opción proporciona un entorno de desarrollo reproducible y evita instalar manualmente las dependencias del proyecto en el equipo.
@@ -91,57 +161,18 @@ Si se realizan cambios en el `Dockerfile` o en el archivo `devcontainer.json`, r
 Dev Containers: Rebuild and Reopen in Container
 ```
 
-## Instalación y Ejecución en la VM
-
-### 1. Clonar el repositorio
-```bash
-git clone <repo-url>
-cd linker1
-```
-
-### 2. Compilar el proyecto
-```bash
-mvn clean package
-```
-
-### 3. Ejecutar la aplicación
-```bash
-java -jar target/linker1-1.0-jar-with-dependencies.jar
-```
-
-La aplicación estará disponible en `http://localhost:8080`
-
-### 4. Despliegue
-
-Se creó el script para poder desplegar de manera más sencilla, lo único necesario es tener el repo clonado en la VM y usar el comando:
-
-```bash
-bash deploy.sh
-```
-
-Este script:
-- Hace pull de los cambios del repo
-- Instala dependencias (Java, Maven, Nginx)
-- Compila el proyecto
-- Configura el servicio systemd
-- Inicia Nginx como reverse proxy
-- Expone la aplicación en puerto 8080
-
-### Verificar que está funcionando
-
-Debería verse la página estática en la URL:
-```bash
-https://1.n-la-c.app/
-```
-Así:
-
-![alt text](doc/image.png)
-
 
 ## Estructura del Proyecto
 
 ```
 linker1/
+├── infra/                    # Infraestructura como código (Terraform)
+│   ├── main.tf
+│   ├── variables.tf
+│   ├── provider.tf
+│   ├── outputs.tf
+│   ├── cloud-init.yaml
+│   └── terraform.tfvars.example
 ├── src/Main.java           # Backend con rutas API
 ├── public/                 # Frontend estático
 │   ├── index.html         # Interfaz web
