@@ -37,4 +37,36 @@ class LinkRepositoryTest {
     void findUrlByIdReturnsNullWhenIdDoesNotExist() throws SQLException {
         assertNull(repo.findUrlById("missing1"));
     }
+
+    @Test
+    void findIdByUrlReturnsIdWhenUrlExists() throws SQLException {
+        try (var ps = conn.prepareStatement("INSERT INTO shorturl (id, url) VALUES (?, ?)")) {
+            ps.setString(1, "abc12345");
+            ps.setString(2, "https://example.com");
+            ps.executeUpdate();
+        }
+
+        assertEquals("abc12345", repo.findIdByUrl("https://example.com"));
+    }
+
+    @Test
+    void findIdByUrlReturnsNullWhenUrlUnknown() throws SQLException {
+        assertNull(repo.findIdByUrl("https://unknown.example.com"));
+    }
+
+    @Test
+    void insertShortUrlPersistsRowAndReturnsGeneratedId() throws SQLException {
+        var id = repo.insertShortUrl("https://example.com");
+
+        assertNotNull(id);
+        assertEquals("https://example.com", repo.findUrlById(id));
+    }
+
+    @Test
+    void insertShortUrlGeneratesDifferentIdsForDifferentUrls() throws SQLException {
+        var firstId = repo.insertShortUrl("https://example.com");
+        var secondId = repo.insertShortUrl("https://other.example.com");
+
+        assertNotEquals(firstId, secondId);
+    }
 }

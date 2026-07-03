@@ -47,6 +47,37 @@ class LinkServiceTest {
     }
 
     @Nested
+    @DisplayName("create")
+    class CreateTests {
+        @Test
+        void createsNewLinkForNewUrl() throws SQLException {
+            var link = service.create("https://example.com");
+
+            assertNotNull(link.id());
+            assertEquals("https://example.com", link.url());
+            assertEquals("https://example.com", service.get(link.id()));
+        }
+
+        @Test
+        void returnsExistingIdWhenUrlAlreadyStored() throws SQLException {
+            var first = service.create("https://example.com");
+            var second = service.create("https://example.com");
+
+            assertEquals(first.id(), second.id());
+        }
+
+        @Test
+        void createRejectsInvalidUrl() {
+            assertThrows(IllegalArgumentException.class, () -> service.create("not a url"));
+        }
+
+        @Test
+        void createRejectsNullUrl() {
+            assertThrows(IllegalArgumentException.class, () -> service.create(null));
+        }
+    }
+
+    @Nested
     @DisplayName("isValidUrl")
     class IsValidUrlTests {
         @Test

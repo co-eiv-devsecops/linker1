@@ -66,4 +66,41 @@ class LinkRoutesTest {
 
         assertEquals(404, response.statusCode());
     }
+
+    @Test
+    void postLinkWithValidUrlReturns201WithLocationHeader() throws Exception {
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/link"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString("{\"url\":\"https://newlink.example.com\"}"))
+                .build();
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(201, response.statusCode());
+        assertTrue(response.headers().firstValue("Location").isPresent());
+    }
+
+    @Test
+    void postLinkWithSameUrlTwiceReturnsSameId() throws Exception {
+        var body = "{\"url\":\"https://repeat.example.com\"}";
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/link"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(body))
+                .build();
+
+        var first = client.send(request, HttpResponse.BodyHandlers.ofString());
+        var second = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(first.body(), second.body());
+    }
+
+    @Test
+    void postLinkWithInvalidUrlReturns400() throws Exception {
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/link"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString("{\"url\":\"not a url\"}"))
+                .build();
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(400, response.statusCode());
+    }
 }
