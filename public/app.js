@@ -1,5 +1,6 @@
 const form = document.getElementById('link-form');
 const urlInput = document.getElementById('url');
+const aliasInput = document.getElementById('alias');
 const message = document.getElementById('message');
 const result = document.getElementById('result');
 const shortLink = document.getElementById('short-link');
@@ -22,12 +23,18 @@ form.addEventListener('submit', async (event) => {
   setMessage('Creando enlace...');
 
   try {
+    const alias = aliasInput.value.trim();
+    const payload = { url: urlInput.value.trim() };
+    if (alias) {
+      payload.alias = alias;
+    }
+
     const response = await fetch('/link', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ url: urlInput.value.trim() }),
+      body: JSON.stringify(payload),
     });
 
     const text = await response.text();
