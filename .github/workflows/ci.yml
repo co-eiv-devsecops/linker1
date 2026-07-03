@@ -181,3 +181,25 @@ jobs:
         run: |
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/does-not-exist-xyz)
           test "$STATUS" = "404"
+
+  api-tests:
+    name: API Tests (Live)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Newman against the live instance
+        run: |
+          npx --yes newman run postman/linker1.postman_collection.json \
+            --env-var "baseUrl=https://1.n-la-c.app" \
+            --reporters cli,junit --reporter-junit-export newman-report.xml
+
+      - name: Upload Newman report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: newman-report
+          path: newman-report.xml
