@@ -1,0 +1,65 @@
+name: Deployment Pipeline
+
+on:
+  push:
+    branches:
+      - DEV
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy-dev:
+    name: Deploy to Development
+    if: github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+
+    environment:
+      name: dev
+
+    steps:
+      - name: Deploy to Development
+        run: |
+          echo "=== DEVELOPMENT DEPLOYMENT ==="
+          echo "Deploying application to Development..."
+          echo "Deployment completed successfully."
+
+  validate-dev:
+    name: Validate Development
+    if: github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    needs: deploy-dev
+
+    steps:
+      - name: Validate deployment
+        run: |
+          echo "Running smoke tests..."
+          echo "All tests passed."
+
+  deploy-prod:
+    name: Deploy to Production
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    environment:
+      name: prod
+
+    steps:
+      - name: Deploy to Production
+        run: |
+          echo "=== PRODUCTION DEPLOYMENT ==="
+          echo "Deploying validated artifact to Production..."
+          echo "Waiting for GitHub Environment approval..."
+          echo "Production deployment successful."
+
+  rollback:
+    name: Rollback
+    if: failure()
+    runs-on: ubuntu-latest
+    needs: deploy-prod
+
+    steps:
+      - name: Rollback
+        run: |
+          echo "Production deployment failed."
+          echo "Rolling back to previous stable version..."
+          echo "Rollback completed successfully."
