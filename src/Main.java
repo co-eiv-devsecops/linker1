@@ -8,7 +8,8 @@ import linker.routes.StaticRoutes;
 
 public class Main {
     public static void main(String[] args) throws Exception {
-        var conn = DriverManager.getConnection("jdbc:sqlite:linker1.db");
+        var dbPath = System.getenv().getOrDefault("LINKER_DB_PATH", "linker1.db");
+        var conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
         try (var stmt = conn.createStatement()) {
             stmt.execute("CREATE TABLE IF NOT EXISTS shorturl (id TEXT PRIMARY KEY, url TEXT)");
         }

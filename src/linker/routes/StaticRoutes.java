@@ -2,47 +2,40 @@ package linker.routes;
 
 import io.javalin.Javalin;
 
-public class StaticRoutes {
+import java.io.InputStream;
+import java.util.function.Function;
+
+public final class StaticRoutes {
+
+    private StaticRoutes() {
+    }
 
     public static void register(Javalin app) {
-        app.get("/", ctx -> {
-            try {
-                var resource = StaticRoutes.class.getResourceAsStream("/index.html");
-                if (resource != null) {
-                    String html = new String(resource.readAllBytes());
-                    ctx.html(html);
-                } else {
-                    ctx.status(404).result("index.html not found");
-                }
-            } catch (Exception e) {
-                ctx.status(500).result("Error reading index.html: " + e.getMessage());
-            }
-        });
+        register(app, resource -> StaticRoutes.class.getResourceAsStream(resource));
+    }
 
-        app.get("/app.js", ctx -> {
-            try {
-                var resource = StaticRoutes.class.getResourceAsStream("/app.js");
-                if (resource != null) {
-                    ctx.contentType("application/javascript").result(new String(resource.readAllBytes()));
-                } else {
-                    ctx.status(404).result("app.js not found");
-                }
-            } catch (Exception e) {
-                ctx.status(500).result("Error reading app.js");
-            }
-        });
+    public static void register(Javalin app, Function<String, InputStream> resourceLoader) {
+        app.get("/", ctx -> serve(ctx, resourceLoader, "/index.html", "text/html", "index.html not found"));
+        app.get("/app.js", ctx -> serve(ctx, resourceLoader, "/app.js", "application/javascript", "app.js not found"));
+        app.get("/styles.css", ctx -> serve(ctx, resourceLoader, "/styles.css", "text/css", "styles.css not found"));
+    }
 
-        app.get("/styles.css", ctx -> {
-            try {
-                var resource = StaticRoutes.class.getResourceAsStream("/styles.css");
-                if (resource != null) {
-                    ctx.contentType("text/css").result(new String(resource.readAllBytes()));
+    private static void serve(io.javalin.http.Context ctx, Function<String, InputStream> resourceLoader,
+                               String resource, String contentType, String notFoundMessage) {
+        try {
+            var stream = resourceLoader.apply(resource);
+            if (stream != null) {
+                var content = new String(stream.readAllBytes());
+                if (contentType.equals("text/html")) {
+                    ctx.html(content);
                 } else {
-                    ctx.status(404).result("styles.css not found");
+                    ctx.contentType(contentType).result(content);
                 }
-            } catch (Exception e) {
-                ctx.status(500).result("Error reading styles.css");
+            } else {
+                ctx.status(404).result(notFoundMessage);
             }
-        });
+        } catch (Exception e) {
+            ctx.status(500).result("Error reading " + resource.substring(1) + ": " + e.getMessage());
+        }
     }
 }

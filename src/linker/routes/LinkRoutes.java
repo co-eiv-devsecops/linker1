@@ -7,7 +7,10 @@ import linker.LinkService;
 
 import java.util.Map;
 
-public class LinkRoutes {
+public final class LinkRoutes {
+
+    private LinkRoutes() {
+    }
 
     public static void register(Javalin app, LinkService service) {
         app.get("/{id}", ctx -> {
