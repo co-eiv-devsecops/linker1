@@ -103,4 +103,64 @@ class LinkRoutesTest {
 
         assertEquals(400, response.statusCode());
     }
+
+    @Test
+    void postLinkWithAvailableAliasReturns201WithAliasAsLocation() throws Exception {
+        var body = "{\"url\":\"https://aliased.example.com\",\"alias\":\"my-cool-alias\"}";
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/link"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(body))
+                .build();
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(201, response.statusCode());
+        assertEquals("/my-cool-alias", response.headers().firstValue("Location").orElse(null));
+    }
+
+    @Test
+    void postLinkWithTakenAliasReturns409() throws Exception {
+        var body = "{\"url\":\"https://first.example.com\",\"alias\":\"taken-alias\"}";
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/link"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(body))
+                .build();
+        client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        var conflictBody = "{\"url\":\"https://second.example.com\",\"alias\":\"taken-alias\"}";
+        var conflictRequest = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/link"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(conflictBody))
+                .build();
+        var response = client.send(conflictRequest, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(409, response.statusCode());
+    }
+
+    @Test
+    void postLinkWithInvalidAliasReturns400() throws Exception {
+        var body = "{\"url\":\"https://example.com\",\"alias\":\"has space\"}";
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/link"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(body))
+                .build();
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(400, response.statusCode());
+    }
+
+    @Test
+    void getAliasedIdRedirectsToStoredUrl() throws Exception {
+        var body = "{\"url\":\"https://redirect-check.example.com\",\"alias\":\"redirect-alias\"}";
+        var createRequest = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/link"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(body))
+                .build();
+        client.send(createRequest, HttpResponse.BodyHandlers.ofString());
+
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/redirect-alias")).GET().build();
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(301, response.statusCode());
+        assertEquals("https://redirect-check.example.com", response.headers().firstValue("Location").orElse(null));
+    }
 }
