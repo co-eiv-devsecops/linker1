@@ -116,6 +116,7 @@ jobs:
 
       - name: Confirm pipeline completion
         run: |
+          chmod +x linker1
           ls -lah
           test -f linker1-1.0-jar-with-dependencies.jar
           test -x linker1
