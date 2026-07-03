@@ -1,0 +1,6 @@
+#!/bin/sh
+# Thin Linux launcher for the linker1 fat jar, bundled alongside it as a
+# release artifact so the packaged output has a directly-executable entry
+# point in addition to `java -jar ...`.
+DIR="$(cd "$(dirname "$0")" && pwd)"
+exec java -jar "$DIR/linker1-1.0-jar-with-dependencies.jar" "$@"

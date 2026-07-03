@@ -1,0 +1,304 @@
+{
+  "info": {
+    "name": "linker1 API",
+    "description": "API tests for the linker1 URL shortener, run against a live instance via Newman. Each request is self-contained (creates its own data) so the collection can run repeatedly without manual setup.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8080" }
+  ],
+  "item": [
+    {
+      "name": "Static assets",
+      "item": [
+        {
+          "name": "GET / returns 200",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('content type is html', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('html'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /app.js returns 200",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/app.js"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /styles.css returns 200",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/styles.css"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Link creation",
+      "item": [
+        {
+          "name": "POST /link with valid url creates a link",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "pm.collectionVariables.set('createUrl', 'https://newman-test-' + Date.now() + '.example.com');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 201', () => pm.response.to.have.status(201));",
+                  "pm.test('Location header is present', () => pm.expect(pm.response.headers.get('Location')).to.not.be.null);",
+                  "pm.collectionVariables.set('createdId', pm.response.text());"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"url\":\"{{createUrl}}\"}"
+            },
+            "url": "{{baseUrl}}/link"
+          }
+        },
+        {
+          "name": "POST /link with same url twice returns same id",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200 (dedupe)', () => pm.response.to.have.status(200));",
+                  "pm.test('id matches previously created id', () => pm.expect(pm.response.text()).to.eql(pm.collectionVariables.get('createdId')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"url\":\"{{createUrl}}\"}"
+            },
+            "url": "{{baseUrl}}/link"
+          }
+        },
+        {
+          "name": "POST /link with invalid url returns 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"url\":\"not a url\"}"
+            },
+            "url": "{{baseUrl}}/link"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Link creation with alias",
+      "item": [
+        {
+          "name": "POST /link with fresh alias returns 201",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "pm.collectionVariables.set('aliasName', 'newman-alias-' + Date.now());",
+                  "pm.collectionVariables.set('aliasUrl', 'https://newman-alias-test.example.com');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 201', () => pm.response.to.have.status(201));",
+                  "pm.test('Location header matches the alias', () => pm.expect(pm.response.headers.get('Location')).to.eql('/' + pm.collectionVariables.get('aliasName')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"url\":\"{{aliasUrl}}\",\"alias\":\"{{aliasName}}\"}"
+            },
+            "url": "{{baseUrl}}/link"
+          }
+        },
+        {
+          "name": "POST /link with taken alias returns 409",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 409', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"url\":\"https://different-url.example.com\",\"alias\":\"{{aliasName}}\"}"
+            },
+            "url": "{{baseUrl}}/link"
+          }
+        },
+        {
+          "name": "POST /link with invalid alias returns 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"url\":\"https://example.com\",\"alias\":\"has space\"}"
+            },
+            "url": "{{baseUrl}}/link"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Redirection",
+      "item": [
+        {
+          "name": "GET /{id} redirects to the stored url (301)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 301', () => pm.response.to.have.status(301));",
+                  "pm.test('Location matches the original url', () => pm.expect(pm.response.headers.get('Location')).to.eql(pm.collectionVariables.get('createUrl')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/{{createdId}}"
+          },
+          "protocolProfileBehavior": {
+            "followRedirects": false
+          }
+        },
+        {
+          "name": "GET /{alias} redirects to the stored url (301)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 301', () => pm.response.to.have.status(301));",
+                  "pm.test('Location matches the aliased url', () => pm.expect(pm.response.headers.get('Location')).to.eql(pm.collectionVariables.get('aliasUrl')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/{{aliasName}}"
+          },
+          "protocolProfileBehavior": {
+            "followRedirects": false
+          }
+        },
+        {
+          "name": "GET /{unknown-id} returns 404",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "pm.collectionVariables.set('unknownId', 'newman-missing-' + Date.now());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/{{unknownId}}"
+          }
+        }
+      ]
+    }
+  ]
+}

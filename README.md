@@ -6,8 +6,14 @@ Un acortador de URLs simple construido con **Java** y **Javalin**, con base de d
 
 Linker1 es una aplicación web que permite:
 - Ingresar una URL larga
-- Generar un código corto (8 caracteres)
-- Redirigir automáticamente cuando accedes al código corto
+- Generar un código corto (8 caracteres) o definir un **alias personalizado**
+- Redirigir automáticamente cuando accedes al código corto o al alias
+
+## API
+
+- `POST /link` — Crea un enlace corto. Body JSON: `{"url": "https://..."}`. Si la URL ya existía, responde `200` con el mismo código; si es nueva, responde `201`.
+  - Alias personalizado (opcional): `{"url": "https://...", "alias": "mi-alias"}`. Reglas del alias: solo letras, números, guion (`-`) y guion bajo (`_`), entre 1 y 64 caracteres, sin espacios. Si el alias ya está en uso por otra URL, responde `409`; si el alias no es válido, responde `400`.
+- `GET /{id}` — Redirige (`301`) a la URL asociada al código corto o alias. Responde `404` si no existe.
 
 ## Requisitos
 
@@ -84,6 +90,30 @@ Así:
 
 ![alt text](doc/image.png)
 
+## Pipeline y calidad
+
+El pipeline de CI (`.github/workflows/ci.yml`) corre en cada `push` a `main` y en cada `pull_request`, con estos jobs:
+
+- **Build**: compila el código (`mvn compile`).
+- **Tests**: ejecuta las pruebas unitarias y de integración (`mvn test`), y verifica el umbral de cobertura con JaCoCo (`mvn verify`).
+- **Package**: genera el jar ejecutable (`target/linker1-1.0-jar-with-dependencies.jar`) junto con un script de arranque (`scripts/linker1`).
+- **Summary**: confirma que el artefacto empaquetado existe y es ejecutable.
+- **Smoke Test**: descarga el jar empaquetado, lo levanta y prueba en caliente las rutas principales (estáticos, crear enlace, alias, redirección, 404).
+- **API Tests (Live)**: solo en `push` a `main`, corre una colección de Postman con [Newman](https://github.com/postmanlabs/newman) contra la instancia desplegada (`https://1.n-la-c.app/`). No se ejecuta en pull requests para no afectar el entorno productivo compartido.
+
+`main` está protegida: requiere al menos una aprobación y que los checks Build/Tests/Package/Summary/Smoke Test pasen antes de poder hacer merge.
+
+### Cobertura de pruebas
+
+El proyecto usa [JaCoCo](https://www.jacoco.org/jacoco/) para medir cobertura de código. El objetivo es 100% de cobertura de líneas (excluyendo `Main.class`, el punto de entrada que abre una conexión real a la base de datos y levanta un servidor real — por convención se excluye de las métricas de cobertura unitaria). El reporte se genera en `target/site/jacoco/` con `mvn verify`.
+
+### Pruebas de API con Postman/Newman
+
+La colección `postman/linker1.postman_collection.json` cubre: rutas estáticas, creación de enlaces (caso válido, duplicado, URL inválida), alias (caso válido, alias repetido, alias inválido) y redirección (por id, por alias, 404). Para correrla localmente:
+
+```bash
+npx newman run postman/linker1.postman_collection.json --env-var "baseUrl=http://localhost:8080"
+```
 
 ## Ejecución con Dev Container (Visual Studio Code)
 
@@ -166,6 +196,11 @@ Dev Containers: Rebuild and Reopen in Container
 
 ```
 linker1/
+├── .github/                  # Workflows de CI y archivos de salud de comunidad
+│   ├── workflows/ci.yml      # Pipeline: build, tests, package, summary, smoke test, API tests
+│   ├── CONTRIBUTING.md       # Estándares de colaboración (branching, TDD, PRs)
+│   ├── PULL_REQUEST_TEMPLATE.md
+│   └── CODEOWNERS
 ├── infra/                    # Infraestructura como código (Terraform)
 │   ├── main.tf
 │   ├── variables.tf
@@ -173,15 +208,33 @@ linker1/
 │   ├── outputs.tf
 │   ├── cloud-init.yaml
 │   └── terraform.tfvars.example
-├── src/Main.java           # Backend con rutas API
+├── src/
+│   ├── Main.java             # Arranque: conexión a BD, servidor Javalin, registro de rutas
+│   └── linker/                # Lógica de negocio y acceso a datos
+│       ├── Link.java
+│       ├── LinkService.java   # Validación, generación de ids, alias
+│       ├── LinkRepository.java # Acceso JDBC a SQLite
+│       ├── AliasConflictException.java
+│       └── routes/            # Handlers HTTP (Javalin)
+│           ├── LinkRoutes.java
+│           └── StaticRoutes.java
+├── test/                      # Pruebas unitarias y de integración (JUnit 5)
+├── postman/                   # Colección de Postman para pruebas de API (Newman)
 ├── public/                 # Frontend estático
 │   ├── index.html         # Interfaz web
 │   ├── app.js             # Lógica del cliente
 │   └── styles.css         # Estilos
+├── scripts/linker1         # Script de arranque ejecutable (empaquetado junto al jar)
 ├── pom.xml                # Configuración Maven
 ├── deploy.sh              # Script de despliegue (OCI)
 └── README.md              # Este archivo
 ```
+
+## Contribuir
+
+El equipo trabaja con ramas cortas por tarea y *small batch development*: cada cambio va en su propia rama (`feature/...`, `refactor/...`, `fix/...`), se abre un pull request pequeño y enfocado, y se hace *squash and merge* hacia `main` una vez aprobado y con el pipeline en verde. El desarrollo sigue TDD (rojo → verde → refactor), reflejado en el historial de commits de cada PR.
+
+Ver [`.github/CONTRIBUTING.md`](.github/CONTRIBUTING.md) para el detalle completo del flujo de trabajo, y [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md) para el checklist que debe cumplir cada PR.
 
 ## Integrantes
 

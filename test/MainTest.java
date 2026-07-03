@@ -1,81 +1,61 @@
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.Nested;
-import org.junit.jupiter.api.DisplayName;
 import static org.junit.jupiter.api.Assertions.*;
-import java.sql.*;
+
+import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.file.Files;
 
 class MainTest {
 
-    @Nested
-    @DisplayName("isValidUrl")
-    class IsValidUrlTests {
-        @Test
-        void returnsTrueForValidHttpUrl() {
-            assertTrue(Main.isValidUrl("http://example.com"));
-        }
+    @Test
+    void mainBootsServerAndServesTheIndexPage() throws Exception {
+        var dbFile = Files.createTempFile("linker1-main-test", ".db");
+        dbFile.toFile().deleteOnExit();
 
-        @Test
-        void returnsTrueForValidHttpsUrl() {
-            assertTrue(Main.isValidUrl("https://example.com"));
-        }
+        var process = startMainInSubprocess(dbFile.toAbsolutePath().toString(), "18099");
+        try {
+            waitForServer("http://localhost:18099/");
 
-        @Test
-        void returnsTrueForUrlWithPathAndQuery() {
-            assertTrue(Main.isValidUrl("https://example.com/path/to/page?query=1&foo=bar"));
-        }
+            var client = HttpClient.newHttpClient();
+            var request = HttpRequest.newBuilder(URI.create("http://localhost:18099/")).GET().build();
+            var response = client.send(request, HttpResponse.BodyHandlers.ofString());
 
-        @Test
-        void returnsTrueForUrlWithPort() {
-            assertTrue(Main.isValidUrl("https://example.com:8443/path"));
-        }
-
-        @Test
-        void returnsFalseForNull() {
-            assertFalse(Main.isValidUrl(null));
-        }
-
-        @Test
-        void returnsFalseForEmptyString() {
-            assertFalse(Main.isValidUrl(""));
-        }
-
-        @Test
-        void returnsFalseForRelativeUrl() {
-            assertFalse(Main.isValidUrl("/relative/path"));
-        }
-
-        @Test
-        void returnsFalseForPlainText() {
-            assertFalse(Main.isValidUrl("not a url"));
-        }
-
-        @Test
-        void returnsTrueForFtpUrl() {
-            assertTrue(Main.isValidUrl("ftp://files.example.com"));
+            assertEquals(200, response.statusCode());
+            assertTrue(response.body().contains("<html"));
+        } finally {
+            process.destroy();
+            process.waitFor();
         }
     }
 
-    @Nested
-    @DisplayName("generateId")
-    class GenerateIdTests {
-        @Test
-        void returns8CharacterString() {
-            var id = Main.generateId();
-            assertNotNull(id);
-            assertEquals(8, id.length());
-        }
+    private static Process startMainInSubprocess(String dbPath, String port) throws IOException {
+        var javaHome = System.getProperty("java.home");
+        var javaBin = javaHome + java.io.File.separator + "bin" + java.io.File.separator + "java";
+        var classpath = System.getProperty("java.class.path");
 
-        @Test
-        void returnsUniqueValuesOnSubsequentCalls() {
-            var id1 = Main.generateId();
-            var id2 = Main.generateId();
-            assertNotEquals(id1, id2);
-        }
+        var builder = new ProcessBuilder(javaBin, "-cp", classpath, "Main");
+        builder.environment().put("LINKER_DB_PATH", dbPath);
+        builder.environment().put("LINKER_PORT", port);
+        builder.redirectErrorStream(true);
+        builder.redirectOutput(ProcessBuilder.Redirect.DISCARD);
+        return builder.start();
+    }
 
-        @Test
-        void returnsOnlyAlphanumericCharacters() {
-            var id = Main.generateId();
-            assertTrue(id.matches("[a-f0-9]+"), "Expected hex characters, got: " + id);
+    private static void waitForServer(String url) throws Exception {
+        var client = HttpClient.newHttpClient();
+        var request = HttpRequest.newBuilder(URI.create(url)).GET().build();
+
+        for (int i = 0; i < 30; i++) {
+            try {
+                client.send(request, HttpResponse.BodyHandlers.discarding());
+                return;
+            } catch (Exception e) {
+                Thread.sleep(200);
+            }
         }
+        fail("Server did not start in time");
     }
 }

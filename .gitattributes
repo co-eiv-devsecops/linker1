@@ -1,0 +1,2 @@
+*.sh text eol=lf
+scripts/linker1 text eol=lf
