@@ -105,6 +105,29 @@ class LinkRoutesTest {
     }
 
     @Test
+    void postLinkWithNoUrlAndNonJsonContentTypeReturns400() throws Exception {
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/link"))
+                .header("Content-Type", "text/plain")
+                .POST(HttpRequest.BodyPublishers.ofString("irrelevant"))
+                .build();
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(400, response.statusCode());
+    }
+
+    @Test
+    void postLinkWithMalformedJsonReturns400() throws Exception {
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/link"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString("{not valid json"))
+                .build();
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(400, response.statusCode());
+        assertEquals("Invalid JSON", response.body());
+    }
+
+    @Test
     void postLinkWithAvailableAliasReturns201WithAliasAsLocation() throws Exception {
         var body = "{\"url\":\"https://aliased.example.com\",\"alias\":\"my-cool-alias\"}";
         var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/link"))
