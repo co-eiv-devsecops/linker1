@@ -39,10 +39,6 @@ public class LinkRepository {
         return id;
     }
 
-    public boolean existsById(String id) throws SQLException {
-        return findUrlById(id) != null;
-    }
-
     public void insertShortUrlWithId(String id, String url) throws SQLException {
         try (var ps = conn.prepareStatement("INSERT INTO shorturl (id, url) VALUES (?, ?)")) {
             ps.setString(1, id);
