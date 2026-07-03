@@ -17,17 +17,24 @@ public class LinkService {
     }
 
     public Link create(String url) throws SQLException {
+        return createResult(url).link();
+    }
+
+    public CreateResult createResult(String url) throws SQLException {
         if (!isValidUrl(url)) {
             throw new IllegalArgumentException("Invalid URL: " + url);
         }
 
         var existingId = repository.findIdByUrl(url);
         if (existingId != null) {
-            return new Link(existingId, url);
+            return new CreateResult(new Link(existingId, url), false);
         }
 
         var id = repository.insertShortUrl(url);
-        return new Link(id, url);
+        return new CreateResult(new Link(id, url), true);
+    }
+
+    public record CreateResult(Link link, boolean created) {
     }
 
     public static boolean isValidUrl(String url) {
