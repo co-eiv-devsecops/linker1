@@ -55,4 +55,74 @@ class StaticRoutesTest {
         assertEquals(200, response.statusCode());
         assertTrue(response.headers().firstValue("Content-Type").orElse("").contains("css"));
     }
+
+    @Test
+    void getRootReturns404WhenResourceMissing() throws Exception {
+        var missingResourceApp = Javalin.create().start(0);
+        try {
+            StaticRoutes.register(missingResourceApp, resource -> null);
+            var missingPort = missingResourceApp.port();
+
+            var request = HttpRequest.newBuilder(URI.create("http://localhost:" + missingPort + "/")).GET().build();
+            var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+            assertEquals(404, response.statusCode());
+            assertEquals("index.html not found", response.body());
+        } finally {
+            missingResourceApp.stop();
+        }
+    }
+
+    @Test
+    void getAppJsReturns404WhenResourceMissing() throws Exception {
+        var missingResourceApp = Javalin.create().start(0);
+        try {
+            StaticRoutes.register(missingResourceApp, resource -> null);
+            var missingPort = missingResourceApp.port();
+
+            var request = HttpRequest.newBuilder(URI.create("http://localhost:" + missingPort + "/app.js")).GET().build();
+            var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+            assertEquals(404, response.statusCode());
+            assertEquals("app.js not found", response.body());
+        } finally {
+            missingResourceApp.stop();
+        }
+    }
+
+    @Test
+    void getStylesCssReturns404WhenResourceMissing() throws Exception {
+        var missingResourceApp = Javalin.create().start(0);
+        try {
+            StaticRoutes.register(missingResourceApp, resource -> null);
+            var missingPort = missingResourceApp.port();
+
+            var request = HttpRequest.newBuilder(URI.create("http://localhost:" + missingPort + "/styles.css")).GET().build();
+            var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+            assertEquals(404, response.statusCode());
+            assertEquals("styles.css not found", response.body());
+        } finally {
+            missingResourceApp.stop();
+        }
+    }
+
+    @Test
+    void getRootReturns500WhenResourceLoaderThrows() throws Exception {
+        var failingResourceApp = Javalin.create().start(0);
+        try {
+            StaticRoutes.register(failingResourceApp, resource -> {
+                throw new RuntimeException("boom");
+            });
+            var failingPort = failingResourceApp.port();
+
+            var request = HttpRequest.newBuilder(URI.create("http://localhost:" + failingPort + "/")).GET().build();
+            var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+            assertEquals(500, response.statusCode());
+            assertTrue(response.body().contains("boom"));
+        } finally {
+            failingResourceApp.stop();
+        }
+    }
 }
