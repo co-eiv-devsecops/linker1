@@ -59,6 +59,16 @@ jobs:
           mvn -B -ntp test
           echo "Paso 3 terminado: pruebas unitarias completadas"
 
+      - name: Check coverage threshold
+        run: mvn -B -ntp verify -DskipTests
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-report
+          path: target/site/jacoco/
+
   package:
     name: Package
     runs-on: ubuntu-latest
