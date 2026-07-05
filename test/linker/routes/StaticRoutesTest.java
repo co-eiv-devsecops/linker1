@@ -21,7 +21,7 @@ class StaticRoutesTest {
     @BeforeAll
     static void startServer() {
         app = Javalin.create().start(0);
-        StaticRoutes.register(app, new FeatureFlags());
+        new StaticRoutes(new FeatureFlags()).register(app);
         port = app.port();
     }
 
@@ -61,7 +61,7 @@ class StaticRoutesTest {
     void getRootReturns404WhenResourceMissing() throws Exception {
         var missingResourceApp = Javalin.create().start(0);
         try {
-            StaticRoutes.register(missingResourceApp, resource -> null);
+            new StaticRoutes(new FeatureFlags(), resource -> null).register(missingResourceApp);
             var missingPort = missingResourceApp.port();
 
             var request = HttpRequest.newBuilder(URI.create("http://localhost:" + missingPort + "/")).GET().build();
@@ -78,7 +78,7 @@ class StaticRoutesTest {
     void getAppJsReturns404WhenResourceMissing() throws Exception {
         var missingResourceApp = Javalin.create().start(0);
         try {
-            StaticRoutes.register(missingResourceApp, resource -> null);
+            new StaticRoutes(new FeatureFlags(), resource -> null).register(missingResourceApp);
             var missingPort = missingResourceApp.port();
 
             var request = HttpRequest.newBuilder(URI.create("http://localhost:" + missingPort + "/app.js")).GET().build();
@@ -95,7 +95,7 @@ class StaticRoutesTest {
     void getStylesCssReturns404WhenResourceMissing() throws Exception {
         var missingResourceApp = Javalin.create().start(0);
         try {
-            StaticRoutes.register(missingResourceApp, resource -> null);
+            new StaticRoutes(new FeatureFlags(), resource -> null).register(missingResourceApp);
             var missingPort = missingResourceApp.port();
 
             var request = HttpRequest.newBuilder(URI.create("http://localhost:" + missingPort + "/styles.css")).GET().build();
@@ -112,9 +112,9 @@ class StaticRoutesTest {
     void getRootReturns500WhenResourceLoaderThrows() throws Exception {
         var failingResourceApp = Javalin.create().start(0);
         try {
-            StaticRoutes.register(failingResourceApp, resource -> {
+            new StaticRoutes(new FeatureFlags(), resource -> {
                 throw new RuntimeException("boom");
-            });
+            }).register(failingResourceApp);
             var failingPort = failingResourceApp.port();
 
             var request = HttpRequest.newBuilder(URI.create("http://localhost:" + failingPort + "/")).GET().build();

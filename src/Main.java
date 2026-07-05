@@ -27,7 +27,7 @@ public class Main {
 
 
         FeatureFlags featureFlags = new FeatureFlags();
-        StaticRoutes.register(app, featureFlags);
+        new StaticRoutes(featureFlags).register(app);
         new LinkRoutes(service).register(app);
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {

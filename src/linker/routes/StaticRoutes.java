@@ -7,22 +7,26 @@ import java.io.InputStream;
 import java.util.function.Function;
 
 public final class StaticRoutes {
+    private final FeatureFlags featureFlags;
+    private final Function<String, InputStream> resourceLoader;
 
-    private StaticRoutes() {
+    public StaticRoutes(FeatureFlags featureFlags) {
+        this(featureFlags, resource -> StaticRoutes.class.getResourceAsStream(resource));
     }
 
-    public static void register(Javalin app,  FeatureFlags featureFlags) {
-        register(app, resource -> StaticRoutes.class.getResourceAsStream(resource));
+    public StaticRoutes(FeatureFlags featureFlags, Function<String, InputStream> resourceLoader) {
+        this.featureFlags = featureFlags;
+        this.resourceLoader = resourceLoader;
     }
 
-    public static void register(Javalin app, Function<String, InputStream> resourceLoader) {
-        app.get("/", ctx -> serve(ctx, resourceLoader, "/v1/index.html", "text/html", "index.html not found"));
-        app.get("/app.js", ctx -> serve(ctx, resourceLoader, "/app.js", "application/javascript", "app.js not found"));
-        app.get("/styles.css", ctx -> serve(ctx, resourceLoader, "/v1/styles.css", "text/css", "styles.css not found"));
+    public void register(Javalin app) {
+        app.get("/", ctx -> serve(ctx, "/v1/index.html", "text/html", "index.html not found"));
+        app.get("/app.js", ctx -> serve(ctx, "/app.js", "application/javascript", "app.js not found"));
+        app.get("/styles.css", ctx -> serve(ctx, "/v1/styles.css", "text/css", "styles.css not found"));
     }
 
-    private static void serve(io.javalin.http.Context ctx, Function<String, InputStream> resourceLoader,
-                               String resource, String contentType, String notFoundMessage) {
+    private void serve(io.javalin.http.Context ctx,
+                       String resource, String contentType, String notFoundMessage) {
         try {
             var stream = resourceLoader.apply(resource);
             if (stream != null) {
