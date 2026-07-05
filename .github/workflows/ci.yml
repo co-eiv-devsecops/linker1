@@ -198,7 +198,7 @@ jobs:
   api-tests:
     name: API Tests (Live)
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/DEV' )
 
     steps:
       - name: Checkout repository
@@ -224,7 +224,7 @@ jobs:
       - smoke
       - api-tests
 
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/DEV')
 
     permissions:
       contents: read
