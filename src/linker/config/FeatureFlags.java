@@ -1,5 +1,6 @@
 package linker.config;
 
+import com.launchdarkly.sdk.LDContext;
 import com.launchdarkly.sdk.server.LDClient;
 
 public class FeatureFlags {
@@ -14,6 +15,16 @@ public class FeatureFlags {
     }
 
     public boolean isNewUiEnabled() {
-        return false;
+        if (ldClient == null) {
+            return false;
+        }
+        try {
+            LDContext context = LDContext.builder("anonymous-user")
+                .anonymous(true)
+                .build();
+            return ldClient.boolVariation("new-ui", context, false);
+        } catch (Exception e) {
+            return false;
+        }
     }
 }
