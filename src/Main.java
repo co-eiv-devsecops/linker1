@@ -3,10 +3,12 @@ import java.sql.*;
 
 import linker.LinkRepository;
 import linker.LinkService;
+import linker.config.FeatureFlags;
 import linker.routes.LinkRoutes;
 import linker.routes.StaticRoutes;
 
 public class Main {
+
     public static void main(String[] args) throws Exception {
         var dbPath = System.getenv().getOrDefault("LINKER_DB_PATH", "linker1.db");
         var conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
@@ -23,7 +25,9 @@ public class Main {
         var repository = new LinkRepository(conn);
         var service = new LinkService(repository);
 
-        StaticRoutes.register(app);
+
+        FeatureFlags featureFlags = new FeatureFlags();
+        StaticRoutes.register(app, featureFlags);
         LinkRoutes.register(app, service);
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {

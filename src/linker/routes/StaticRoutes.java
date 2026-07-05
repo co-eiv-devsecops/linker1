@@ -1,6 +1,7 @@
 package linker.routes;
 
 import io.javalin.Javalin;
+import linker.config.FeatureFlags;
 
 import java.io.InputStream;
 import java.util.function.Function;
@@ -10,7 +11,7 @@ public final class StaticRoutes {
     private StaticRoutes() {
     }
 
-    public static void register(Javalin app) {
+    public static void register(Javalin app,  FeatureFlags featureFlags) {
         register(app, resource -> StaticRoutes.class.getResourceAsStream(resource));
     }
 

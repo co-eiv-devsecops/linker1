@@ -1,6 +1,7 @@
 package linker.routes;
 
 import io.javalin.Javalin;
+import linker.config.FeatureFlags;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -20,7 +21,7 @@ class StaticRoutesTest {
     @BeforeAll
     static void startServer() {
         app = Javalin.create().start(0);
-        StaticRoutes.register(app);
+        StaticRoutes.register(app, new FeatureFlags());
         port = app.port();
     }
 
