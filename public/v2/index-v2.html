@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Linker - Colombia ⚽</title>
+    <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+    <main class="shell">
+        <section class="hero">
+            <p class="eyebrow">🇨🇴 Linker Colombia Edition</p>
+            <h1>¡Acorta enlaces como un campeón!</h1>
+            <p class="lede">
+                Comparte tus enlaces con la potencia de la selección. Una herramienta simple para grandes jugadas digitales.
+            </p>
+        </section>
+
+        <section class="card">
+            <form id="link-form" class="form">
+                <label for="url">URL original</label>
+                <div class="input-row">
+                    <input id="url" name="url" type="url" placeholder="https://ejemplo.com/articulo" autocomplete="off" required />
+                    <button type="submit">⚽ Acortar</button>
+                </div>
+                <label for="alias">Alias personalizado (opcional)</label>
+                <input id="alias" name="alias" type="text" placeholder="mi-gol" autocomplete="off" pattern="[A-Za-z0-9_-]{1,64}" />
+            </form>
+
+            <div id="message" class="message" aria-live="polite"></div>
+
+            <div id="result" class="result hidden">
+                <div>
+                    <p class="result-label">🏆 Tu enlace corto</p>
+                    <a id="short-link" href="#" target="_blank" rel="noreferrer"></a>
+                </div>
+                <button id="copy-btn" type="button">📋 Copiar</button>
+            </div>
+        </section>
+
+        <section class="card subtle">
+            <h2>Cómo funciona</h2>
+            <ol>
+                <li>Ingresa una URL válida y lista para jugar.</li>
+                <li>El sistema la guarda de forma segura.</li>
+                <li>Obtén tu enlace corto y comparte tu jugada.</li>
+            </ol>
+        </section>
+
+        <section class="card subtle">
+            <h2>El equipo detrás del gol</h2>
+            <ul>
+                <li>ANDERSSON DAVID SÁNCHEZ MÉNDEZ</li>
+                <li>ANDERSON FABIAN GARCIA NIETO</li>
+                <li>DANIEL PATIÑO MEJIA</li>
+                <li>ESTEBAN AGUILERA CONTRERAS</li>
+                <li>JUAN JOSE DIAZ GOMEZ</li>
+            </ul>
+        </section>
+    </main>
+
+    <script src="/app.js"></script>
+</body>
+</html>
