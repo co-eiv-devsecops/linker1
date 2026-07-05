@@ -2,8 +2,15 @@ package linker.config;
 
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
 import com.launchdarkly.sdk.server.LDClient;
 import com.launchdarkly.sdk.server.LDConfig;
+
 
 class FeatureFlagsTest {
 
@@ -29,14 +36,16 @@ class FeatureFlagsTest {
     }
 
     @Test
-    void testIsNewUiEnabledExceptionHandling() throws Exception {
-        LDConfig config = new LDConfig.Builder().offline(true).build();
-        LDClient client = new LDClient("sdk-dummy", config);
+    void testIsNewUiEnabledExceptionHandling() {
+        LDClient client = mock(LDClient.class);
+
+        when(client.boolVariation(anyString(), any(), anyBoolean()))
+                .thenThrow(new RuntimeException("LaunchDarkly failure"));
+
         FeatureFlags ff = new FeatureFlags(client);
-        
-        // Close the client so calls to it throw a LogicallyClosedException
-        client.close();
-        
+
         assertFalse(ff.isNewUiEnabled());
     }
+
+    
 }
