@@ -39,7 +39,11 @@ sudo mkdir -p "$WEB_DIR"
 if [ "$REPO_DIR" = "$WORKDIR" ]; then
   echo "✓ Using current repository directory..."
   if [ -d "$REPO_DIR/.git" ]; then
-    git -C "$REPO_DIR" pull --ff-only
+    if git -C "$REPO_DIR" symbolic-ref -q HEAD > /dev/null; then
+      git -C "$REPO_DIR" pull --ff-only
+    else
+      echo "✓ HEAD desacoplado (ej. tras un rollback a un tag); no se hace pull."
+    fi
   fi
 else
   if [ ! -d "$REPO_DIR/.git" ]; then
@@ -47,7 +51,11 @@ else
     git clone "$REPO_URL" "$REPO_DIR"
   else
     echo "✓ Updating repo..."
-    git -C "$REPO_DIR" pull --ff-only
+    if git -C "$REPO_DIR" symbolic-ref -q HEAD > /dev/null; then
+      git -C "$REPO_DIR" pull --ff-only
+    else
+      echo "✓ HEAD desacoplado (ej. tras un rollback a un tag); no se hace pull."
+    fi
   fi
 fi
 

@@ -58,8 +58,50 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Rollback to previous version
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve previous stable tag
+        id: previous
         run: |
-          echo "Production deployment failed."
-          echo "Rolling back to the previous stable version..."
-          echo "Rollback completed successfully."
+          CURRENT_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -z "$CURRENT_TAG" ]; then
+            echo "No hay tags publicados; no se puede determinar la version anterior."
+            exit 1
+          fi
+
+          PREVIOUS_TAG=$(git tag -l 'v*.*.*' --sort=-version:refname | grep -A1 "^${CURRENT_TAG}$" | tail -1)
+          if [ -z "$PREVIOUS_TAG" ] || [ "$PREVIOUS_TAG" = "$CURRENT_TAG" ]; then
+            echo "No existe una version anterior a $CURRENT_TAG para hacer rollback."
+            exit 1
+          fi
+
+          echo "Version actual: $CURRENT_TAG"
+          echo "Version de rollback: $PREVIOUS_TAG"
+          echo "tag=$PREVIOUS_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Rollback via SSH
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+        run: |
+          echo "${{ secrets.VM_SSH_KEY }}" > vm_key.pem
+          chmod 600 vm_key.pem
+
+          ssh -o StrictHostKeyChecking=no -i vm_key.pem "$VM_USER@$VM_HOST" \
+            "cd linker1 && bash scripts/rollback.sh ${{ steps.previous.outputs.tag }}"
+
+          rm -f vm_key.pem
+
+      - name: Verify rollback
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://$VM_HOST:8080/" || echo "000")
+          if [ "$STATUS" != "200" ]; then
+            echo "El servicio no respondió correctamente tras el rollback (status: $STATUS)."
+            exit 1
+          fi
+          echo "Rollback verificado: el servicio responde 200 en ${{ steps.previous.outputs.tag }}."
