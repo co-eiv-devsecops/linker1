@@ -18,20 +18,18 @@ Antes de este cambio, la respuesta no incluía `required_status_checks` ni `requ
 
 - **Requiere Pull Request**: no se permite push directo a `DEV`.
 - **1 aprobación mínima**, y se descartan aprobaciones previas si se suben nuevos commits (`dismiss_stale_reviews`).
-- **Checks de estado obligatorios** (deben pasar en verde antes de mergear), tomados de los workflows reales que corren sobre `DEV` hoy (`.github/workflows/ci.yml` y `.github/workflows/pipeline.yml`):
+- **Checks de estado obligatorios** (deben pasar en verde antes de mergear), tomados de `.github/workflows/ci.yml`, el único workflow que realmente corre sobre un `pull_request` hacia `DEV`:
   - `Build`
   - `Tests`
   - `Package`
   - `Summary`
   - `Smoke Test`
-  - `Deploy to Development`
-  - `Validate Development`
 - **`strict: true`**: la rama debe estar actualizada con `DEV` antes de mergear.
 - **Conversaciones resueltas**: no se puede mergear con comentarios de revisión sin resolver.
 - **Sin force-push ni borrado de la rama.**
 - **`enforce_admins: true`**: las reglas aplican también a administradores del repo, sin bypass.
 
-No se incluyeron como requeridos `API Tests (Live)` (corre contra la instancia productiva real, no tiene sentido bloquear un merge a `DEV` por eso) ni `Deploy to Production`/`Rollback` (están condicionados a `main`, por lo que aparecen como `skipped` en cualquier push a `DEV` — un check "skipped" nunca cumple un requerimiento de status check).
+No se incluyeron como requeridos ni `API Tests (Live)` ni los jobs de `.github/workflows/pipeline.yml` (`Deploy to Development`, `Validate Development`, `Deploy to Production`, `Rollback`). Ese workflow solo se dispara con `on: push` (y `workflow_dispatch`), nunca con `pull_request` — sus jobs simplemente no existen como checks sobre un PR. Esto se descubrió de la forma dura: la primera versión de esta configuración sí los incluyó como requeridos, lo que dejó **todo PR hacia `DEV` bloqueado permanentemente** (`mergeStateStatus: BLOCKED`, sin ningún check posible que lo satisficiera). Se corrigió de inmediato al detectarlo en el primer PR real (#38) que pasó por esta regla.
 
 `required_linear_history` se dejó en `false` para `DEV` (a diferencia de `main`): al ser la rama de integración de varias features en paralelo, tiene sentido permitir merge commits; `main` sigue usando squash-merge como único punto de verdad.
 
@@ -50,7 +48,7 @@ Usando el archivo [`protection-config.json`](protection-config.json) de este mis
 gh api repos/co-eiv-devsecops/linker1/branches/DEV/protection
 ```
 
-Debe devolver `required_status_checks.contexts` con los 7 checks listados arriba y `required_pull_request_reviews.required_approving_review_count: 1`.
+Debe devolver `required_status_checks.contexts` con los 5 checks listados arriba y `required_pull_request_reviews.required_approving_review_count: 1`.
 
 Como prueba adicional, se puede intentar un push directo a `DEV` (sin PR) desde un checkout local:
 
