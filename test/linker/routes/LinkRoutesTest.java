@@ -40,7 +40,7 @@ class LinkRoutesTest {
         var repo = new LinkRepository(conn);
         var service = new LinkService(repo);
         app = Javalin.create().start(0);
-        LinkRoutes.register(app, service);
+        new LinkRoutes(service).register(app);
         port = app.port();
     }
 
@@ -185,5 +185,17 @@ class LinkRoutesTest {
 
         assertEquals(301, response.statusCode());
         assertEquals("https://redirect-check.example.com", response.headers().firstValue("Location").orElse(null));
+    }
+
+    @Test
+    void postLinkFormParametersReturns201() throws Exception {
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/link"))
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .POST(HttpRequest.BodyPublishers.ofString("url=https%3A%2F%2Fform.example.com"))
+                .build();
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(201, response.statusCode());
+        assertTrue(response.headers().firstValue("Location").isPresent());
     }
 }

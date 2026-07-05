@@ -156,6 +156,8 @@ jobs:
           name: linker1-jar
 
       - name: Start app
+        env:
+          LD_SDK_KEY: ${{ secrets.LD_SDK_KEY }}
         run: |
           chmod +x linker1
           LINKER_PORT=8080 ./linker1 &

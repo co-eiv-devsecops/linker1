@@ -1,6 +1,7 @@
 package linker.routes;
 
 import io.javalin.Javalin;
+import linker.config.FeatureFlags;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -16,11 +17,17 @@ class StaticRoutesTest {
     static Javalin app;
     static int port;
     static HttpClient client = HttpClient.newHttpClient();
+    static final FeatureFlags disabledFlags = new FeatureFlags() {
+        @Override
+        public boolean isNewUiEnabled() {
+            return false;
+        }
+    };
 
     @BeforeAll
     static void startServer() {
         app = Javalin.create().start(0);
-        StaticRoutes.register(app);
+        new StaticRoutes(disabledFlags).register(app);
         port = app.port();
     }
 
@@ -60,7 +67,7 @@ class StaticRoutesTest {
     void getRootReturns404WhenResourceMissing() throws Exception {
         var missingResourceApp = Javalin.create().start(0);
         try {
-            StaticRoutes.register(missingResourceApp, resource -> null);
+            new StaticRoutes(disabledFlags, resource -> null).register(missingResourceApp);
             var missingPort = missingResourceApp.port();
 
             var request = HttpRequest.newBuilder(URI.create("http://localhost:" + missingPort + "/")).GET().build();
@@ -77,7 +84,7 @@ class StaticRoutesTest {
     void getAppJsReturns404WhenResourceMissing() throws Exception {
         var missingResourceApp = Javalin.create().start(0);
         try {
-            StaticRoutes.register(missingResourceApp, resource -> null);
+            new StaticRoutes(disabledFlags, resource -> null).register(missingResourceApp);
             var missingPort = missingResourceApp.port();
 
             var request = HttpRequest.newBuilder(URI.create("http://localhost:" + missingPort + "/app.js")).GET().build();
@@ -94,7 +101,7 @@ class StaticRoutesTest {
     void getStylesCssReturns404WhenResourceMissing() throws Exception {
         var missingResourceApp = Javalin.create().start(0);
         try {
-            StaticRoutes.register(missingResourceApp, resource -> null);
+            new StaticRoutes(disabledFlags, resource -> null).register(missingResourceApp);
             var missingPort = missingResourceApp.port();
 
             var request = HttpRequest.newBuilder(URI.create("http://localhost:" + missingPort + "/styles.css")).GET().build();
@@ -111,9 +118,9 @@ class StaticRoutesTest {
     void getRootReturns500WhenResourceLoaderThrows() throws Exception {
         var failingResourceApp = Javalin.create().start(0);
         try {
-            StaticRoutes.register(failingResourceApp, resource -> {
+            new StaticRoutes(disabledFlags, resource -> {
                 throw new RuntimeException("boom");
-            });
+            }).register(failingResourceApp);
             var failingPort = failingResourceApp.port();
 
             var request = HttpRequest.newBuilder(URI.create("http://localhost:" + failingPort + "/")).GET().build();
@@ -123,6 +130,53 @@ class StaticRoutesTest {
             assertTrue(response.body().contains("boom"));
         } finally {
             failingResourceApp.stop();
+        }
+    }
+
+    @Test
+    void getRootWithNewUiEnabledReturnsV2Html() throws Exception {
+        var flagEnabledFlags = new FeatureFlags() {
+            @Override
+            public boolean isNewUiEnabled() {
+                return true;
+            }
+        };
+        var appWithFlags = Javalin.create().start(0);
+        try {
+            new StaticRoutes(flagEnabledFlags).register(appWithFlags);
+            var testPort = appWithFlags.port();
+
+            var request = HttpRequest.newBuilder(URI.create("http://localhost:" + testPort + "/")).GET().build();
+            var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+            assertEquals(200, response.statusCode());
+            assertTrue(response.body().contains("Colombia Edition"));
+        } finally {
+            appWithFlags.stop();
+        }
+    }
+
+    @Test
+    void getStylesCssWithNewUiEnabledReturnsV2Css() throws Exception {
+        var flagEnabledFlags = new FeatureFlags() {
+            @Override
+            public boolean isNewUiEnabled() {
+                return true;
+            }
+        };
+        var appWithFlags = Javalin.create().start(0);
+        try {
+            new StaticRoutes(flagEnabledFlags).register(appWithFlags);
+            var testPort = appWithFlags.port();
+
+            var request = HttpRequest.newBuilder(URI.create("http://localhost:" + testPort + "/styles.css")).GET().build();
+            var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+            assertEquals(200, response.statusCode());
+            assertTrue(response.headers().firstValue("Content-Type").orElse("").contains("css"));
+            assertTrue(response.body().contains("--colombia-blue"));
+        } finally {
+            appWithFlags.stop();
         }
     }
 }

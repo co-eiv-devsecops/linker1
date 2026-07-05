@@ -69,4 +69,16 @@ class LinkRepositoryTest {
 
         assertNotEquals(firstId, secondId);
     }
+
+    @Test
+    void findUrlByIdThrowsExceptionWhenConnectionClosed() throws SQLException {
+        conn.close();
+        assertThrows(SQLException.class, () -> repo.findUrlById("id"));
+    }
+
+    @Test
+    void findIdByUrlThrowsExceptionWhenConnectionClosed() throws SQLException {
+        conn.close();
+        assertThrows(SQLException.class, () -> repo.findIdByUrl("url"));
+    }
 }

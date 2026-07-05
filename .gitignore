@@ -3,6 +3,7 @@ target/
 *.class
 *.jar
 *.log
+*.metals
 /.vscode/
 
 infra/terraform.tfvars
