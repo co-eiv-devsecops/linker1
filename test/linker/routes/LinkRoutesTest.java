@@ -40,7 +40,7 @@ class LinkRoutesTest {
         var repo = new LinkRepository(conn);
         var service = new LinkService(repo);
         app = Javalin.create().start(0);
-        LinkRoutes.register(app, service);
+        new LinkRoutes(service).register(app);
         port = app.port();
     }
 
