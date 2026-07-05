@@ -20,9 +20,17 @@ public final class StaticRoutes {
     }
 
     public void register(Javalin app) {
-        app.get("/", ctx -> serve(ctx, "/v1/index.html", "text/html", "index.html not found"));
+        app.get("/", ctx -> {
+            String path = featureFlags.isNewUiEnabled() ? "/v2/index-v2.html" : "/v1/index.html";
+            String notFound = featureFlags.isNewUiEnabled() ? "index-v2.html not found" : "index.html not found";
+            serve(ctx, path, "text/html", notFound);
+        });
         app.get("/app.js", ctx -> serve(ctx, "/app.js", "application/javascript", "app.js not found"));
-        app.get("/styles.css", ctx -> serve(ctx, "/v1/styles.css", "text/css", "styles.css not found"));
+        app.get("/styles.css", ctx -> {
+            String path = featureFlags.isNewUiEnabled() ? "/v2/styles2.css" : "/v1/styles.css";
+            String notFound = featureFlags.isNewUiEnabled() ? "styles2.css not found" : "styles.css not found";
+            serve(ctx, path, "text/css", notFound);
+        });
     }
 
     private void serve(io.javalin.http.Context ctx,
