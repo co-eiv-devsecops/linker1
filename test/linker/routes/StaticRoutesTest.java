@@ -126,4 +126,51 @@ class StaticRoutesTest {
             failingResourceApp.stop();
         }
     }
+
+    @Test
+    void getRootWithNewUiEnabledReturnsV2Html() throws Exception {
+        var flagEnabledFlags = new FeatureFlags() {
+            @Override
+            public boolean isNewUiEnabled() {
+                return true;
+            }
+        };
+        var appWithFlags = Javalin.create().start(0);
+        try {
+            new StaticRoutes(flagEnabledFlags).register(appWithFlags);
+            var testPort = appWithFlags.port();
+
+            var request = HttpRequest.newBuilder(URI.create("http://localhost:" + testPort + "/")).GET().build();
+            var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+            assertEquals(200, response.statusCode());
+            assertTrue(response.body().contains("Colombia Edition"));
+        } finally {
+            appWithFlags.stop();
+        }
+    }
+
+    @Test
+    void getStylesCssWithNewUiEnabledReturnsV2Css() throws Exception {
+        var flagEnabledFlags = new FeatureFlags() {
+            @Override
+            public boolean isNewUiEnabled() {
+                return true;
+            }
+        };
+        var appWithFlags = Javalin.create().start(0);
+        try {
+            new StaticRoutes(flagEnabledFlags).register(appWithFlags);
+            var testPort = appWithFlags.port();
+
+            var request = HttpRequest.newBuilder(URI.create("http://localhost:" + testPort + "/styles.css")).GET().build();
+            var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+            assertEquals(200, response.statusCode());
+            assertTrue(response.headers().firstValue("Content-Type").orElse("").contains("css"));
+            assertTrue(response.body().contains("--colombia-blue"));
+        } finally {
+            appWithFlags.stop();
+        }
+    }
 }
