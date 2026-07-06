@@ -21,19 +21,16 @@ public class Main {
             System.getenv().getOrDefault("LINKER_PORT", "8080")
         );
 
-        var app = Javalin.create().start(port);
-
         var repository = new LinkRepository(conn);
         var service = new LinkService(repository);
 
-
         String ldSdkKey = System.getenv("LD_SDK_KEY");
         if (ldSdkKey == null || ldSdkKey.isBlank()) {
-            System.err.println("ERROR: La variable de entorno LD_SDK_KEY no está configurada.");
+            System.err.println("ERROR: The LD_SDK_KEY environment variable is not set.");
             System.exit(1);
         }
 
-        System.out.println("Inicializando LaunchDarkly...");
+        System.out.println("Initializing LaunchDarkly...");
         LDClient ldClient;
         if ("true".equalsIgnoreCase(System.getenv("LD_OFFLINE"))) {
             com.launchdarkly.sdk.server.LDConfig config = new com.launchdarkly.sdk.server.LDConfig.Builder()
@@ -45,14 +42,19 @@ public class Main {
         }
 
         if (!ldClient.isInitialized()) {
-            System.err.println("ERROR: Falló la inicialización del cliente de LaunchDarkly.");
+            System.err.println("ERROR: Failed to initialize the LaunchDarkly client.");
             System.exit(1);
         }
-        System.out.println("LaunchDarkly inicializado correctamente.");
+        System.out.println("LaunchDarkly initialized successfully.");
 
         FeatureFlags featureFlags = new FeatureFlags(ldClient);
+
+        // Routes are registered before the server starts listening, so the port
+        // never accepts a connection while it would otherwise 404 with no routes.
+        var app = Javalin.create();
         new StaticRoutes(featureFlags).register(app);
         new LinkRoutes(service).register(app);
+        app.start(port);
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             try {

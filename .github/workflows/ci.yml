@@ -38,14 +38,14 @@ jobs:
 
       - name: Show build context
         run: |
-          echo "Paso 1 terminado: repositorio listo"
+          echo "Step 1 done: repository ready"
           java -version
           mvn -version
 
       - name: Compile sources
         run: |
           mvn -B -ntp compile
-          echo "Paso 2 terminado: compilación completada"
+          echo "Step 2 done: compilation completed"
 
   test:
     name: Tests
@@ -67,7 +67,7 @@ jobs:
       - name: Run unit tests
         run: |
           mvn -B -ntp test
-          echo "Paso 3 terminado: pruebas unitarias completadas"
+          echo "Step 3 done: unit tests completed"
 
       - name: Check coverage threshold
         run: mvn -B -ntp verify -DskipTests
@@ -99,7 +99,7 @@ jobs:
       - name: Build application package
         run: |
           mvn -B -ntp package -DskipTests
-          echo "Paso 4 terminado: artefacto empaquetado"
+          echo "Step 4 done: artifact packaged"
 
       - name: Add Linux launcher script
         run: |
@@ -131,7 +131,7 @@ jobs:
           ls -lah
           test -f linker1-1.0-jar-with-dependencies.jar
           test -x linker1
-          echo "Paso 5 terminado: build, pruebas y empaquetado completados"
+          echo "Step 5 done: build, tests, and packaging completed"
 
   smoke:
     name: Smoke Test
