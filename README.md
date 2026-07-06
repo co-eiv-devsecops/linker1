@@ -103,6 +103,46 @@ El pipeline de CI (`.github/workflows/ci.yml`) corre en cada `push` a `main` y e
 
 `main` está protegida: requiere al menos una aprobación y que los checks Build/Tests/Package/Summary/Smoke Test pasen antes de poder hacer merge.
 
+### Despliegue continuo
+
+Cada `push` a `main` dispara además `.github/workflows/pipeline.yml`, que compila el jar, lo despliega a la VM de producción a través de un OCI Bastion (la VM no tiene IP pública), valida que el servicio responda, y hace rollback automático al tag estable anterior si algo falla. El detalle completo (jobs, secrets requeridos, mecanismo de bastión) está en [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md); la estrategia de rollback en [`docs/ROLLBACK_STRATEGY.md`](docs/ROLLBACK_STRATEGY.md).
+
+## Releases (GitHub Release)
+
+El proyecto incluye un workflow de release en `.github/workflows/release.yml` que crea una **GitHub Release** automáticamente y adjunta artefactos listos para descargar.
+
+### ¿Cuándo se ejecuta?
+
+- Automático: cuando se publica un tag con formato `vMAJOR.MINOR.PATCH` (por ejemplo `v1.2.3`).
+- Manual: desde **Actions > Release > Run workflow**, indicando un tag existente con ese formato.
+
+### ¿Qué valida y qué publica?
+
+Antes de publicar, el workflow ejecuta:
+
+- `mvn clean verify` (compilación, pruebas y regla de cobertura)
+- `mvn package -DskipTests`
+
+Luego crea/actualiza la Release y adjunta:
+
+- `linker1-1.0-jar-with-dependencies.jar`
+- `linker1` (script de arranque Linux)
+
+### Flujo recomendado de versionado
+
+1. Crear tag semántico:
+
+```bash
+git tag v1.2.3
+git push origin v1.2.3
+```
+
+2. Esperar a que termine el workflow **Release**.
+3. Verificar en **GitHub > Releases** que:
+  - existe la release `Linker1 v1.2.3`
+  - están adjuntos los dos artefactos
+  - las notas automáticas de release se generaron (y opcionalmente editarlas)
+
 ### Cobertura de pruebas
 
 El proyecto usa [JaCoCo](https://www.jacoco.org/jacoco/) para medir cobertura de código. El objetivo es 100% de cobertura de líneas (excluyendo `Main.class`, el punto de entrada que abre una conexión real a la base de datos y levanta un servidor real — por convención se excluye de las métricas de cobertura unitaria). El reporte se genera en `target/site/jacoco/` con `mvn verify`.

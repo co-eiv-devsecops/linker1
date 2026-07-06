@@ -8,11 +8,13 @@ import linker.LinkService;
 import java.util.Map;
 
 public final class LinkRoutes {
+    private final LinkService service;
 
-    private LinkRoutes() {
+    public LinkRoutes(LinkService service) {
+        this.service = service;
     }
 
-    public static void register(Javalin app, LinkService service) {
+    public void register(Javalin app) {
         app.get("/{id}", ctx -> {
             var id = ctx.pathParam("id");
             var url = service.get(id);

@@ -39,6 +39,8 @@ class MainTest {
         var builder = new ProcessBuilder(javaBin, "-cp", classpath, "Main");
         builder.environment().put("LINKER_DB_PATH", dbPath);
         builder.environment().put("LINKER_PORT", port);
+        builder.environment().put("LD_SDK_KEY", "test-key-for-testing");
+        builder.environment().put("LD_OFFLINE", "true");
         builder.redirectErrorStream(true);
         builder.redirectOutput(ProcessBuilder.Redirect.DISCARD);
         return builder.start();
