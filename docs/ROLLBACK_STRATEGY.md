@@ -1,106 +1,106 @@
-# Estrategia de Rollback
+# Rollback Strategy
 
-## Contexto
+## Context
 
-Linker1 se despliega en una VM de OCI mediante `deploy.sh`, que compila el proyecto directamente sobre la VM (arquitectura x86_64) y lo deja corriendo como el servicio systemd `linker1.service` detrás de Nginx. Las versiones se marcan con tags Git siguiendo [Semantic Versioning](https://semver.org/) (`vMAJOR.MINOR.PATCH`); cada tag `v*.*.*` dispara el workflow `release.yml`, que publica un GitHub Release con el jar empaquetado y el script de arranque (`scripts/linker1`) como artefactos.
+Linker1 is deployed on an OCI VM via `deploy.sh`, which builds the project directly on the VM (x86_64 architecture) and leaves it running as the `linker1.service` systemd service behind Nginx. Versions are tagged with Git tags following [Semantic Versioning](https://semver.org/) (`vMAJOR.MINOR.PATCH`); every `v*.*.*` tag triggers the `release.yml` workflow, which publishes a GitHub Release with the packaged jar and the launcher script (`scripts/linker1`) as assets.
 
-Esta estrategia de rollback usa exactamente esos dos mecanismos que ya existen (tags SemVer + `deploy.sh`) en lugar de introducir infraestructura nueva: revertir significa parar el servicio, volver al código de un tag anterior y reconstruir/reiniciar con `deploy.sh`.
+This rollback strategy uses exactly those two mechanisms that already exist (SemVer tags + `deploy.sh`) instead of introducing new infrastructure: rolling back means stopping the service, switching to the code of a previous tag, and rebuilding/restarting with `deploy.sh`.
 
-## Cuándo hacer rollback
+## When to roll back
 
-- El `deploy-prod` de `pipeline.yml` falla o el servicio no arranca después de un despliegue.
-- El smoke test post-despliegue (los mismos checks que corren en CI: estáticos, crear enlace, alias, redirección, 404) falla contra la instancia en vivo.
-- Se detecta un bug crítico o una regresión de datos poco después de un release.
+- `pipeline.yml`'s `deploy-prod` fails or the service doesn't start after a deployment.
+- The post-deploy smoke test (the same checks that run in CI: static assets, create link, alias, redirect, 404) fails against the live instance.
+- A critical bug or data regression is detected shortly after a release.
 
-## Estrategia
+## Strategy
 
-1. **Identificar la última versión estable**: el tag inmediatamente anterior al que falló (ej. si `v1.2.0` falla, el rollback es a `v1.1.0`).
-2. **Detener el servicio** en la VM (`systemctl stop linker1.service`) para no dejarlo sirviendo una versión rota.
-3. **Volver al código de ese tag** en el checkout que ya existe en la VM (`git fetch --tags && git checkout <tag>`), sin re-clonar ni depender de artefactos externos.
-4. **Reconstruir con `deploy.sh`**, exactamente el mismo camino que un despliegue normal — así el rollback no es un procedimiento paralelo sin probar, sino el mismo script que ya se usa a diario, apuntado a un commit distinto.
-5. **Verificar** que el servicio está `active (running)` y que las rutas principales responden como se espera.
+1. **Identify the last stable version**: the tag immediately before the one that failed (e.g. if `v1.2.0` fails, roll back to `v1.1.0`).
+2. **Stop the service** on the VM (`systemctl stop linker1.service`) so it doesn't keep serving a broken version.
+3. **Switch to that tag's code** in the checkout that already exists on the VM (`git fetch --tags && git checkout <tag>`), without re-cloning or depending on external artifacts.
+4. **Rebuild with `deploy.sh`**, the exact same path as a normal deployment — so the rollback isn't a separate, untested procedure, but the same script already used daily, just pointed at a different commit.
+5. **Verify** that the service is `active (running)` and that the main routes respond as expected.
 
-Este es el mismo enfoque documentado por Esteban para releases: los tags ya existen y ya son la fuente de verdad de "qué versión es esta"; el rollback simplemente se mueve a un tag anterior en vez de a uno nuevo.
+This is the same approach Esteban documented for releases: tags already exist and are already the source of truth for "what version is this"; the rollback simply moves to a previous tag instead of a new one.
 
-## Procedimiento manual (por OCI Cloud Shell)
+## Manual procedure (via OCI Cloud Shell)
 
-La VM no tiene IP pública (`assign_public_ip = false` en `infra/main.tf`), así que no se puede hacer `ssh ubuntu@<host>` desde cualquier máquina. El acceso manual se hace desde **OCI Cloud Shell** (que ya corre dentro de la red de OCI) usando una llave SSH guardada en OCI Vault:
+The VM has no public IP (`assign_public_ip = false` in `infra/main.tf`), so you can't `ssh ubuntu@<host>` from just any machine. Manual access happens from **OCI Cloud Shell** (which already runs inside OCI's network) using an SSH key stored in OCI Vault:
 
 ```bash
-# 0. Configurar IDs relevantes una sola vez (~/.bash_env, cargado desde ~/.bashrc)
+# 0. Set up the relevant IDs once (~/.bash_env, loaded from ~/.bashrc)
 export CMP_ID="ocid1.compartment.oc1..xxxxxxxx"
 export SUBNET_ID="ocid1.subnet.oc1.sa-bogota-1.xxxxxxxx"
 export VM_KEY_SECRET_ID="ocid1.vaultsecret.oc1..xxxxxxxx"
 
-# 1. Traer la llave privada SSH desde el Vault y darle una entrada corta en ~/.ssh/config
+# 1. Fetch the SSH private key from the Vault and give it a short entry in ~/.ssh/config
 oci secrets secret-bundle get --secret-id "$VM_KEY_SECRET_ID" --stage Current \
   --query 'data."secret-bundle-content".content' --raw-output | base64 -d > ~/.ssh/linker.key
 chmod 600 ~/.ssh/linker.key
-# Agregar a ~/.ssh/config:
+# Add to ~/.ssh/config:
 #   Host linker
 #       HostName A.B.C.D
 #       User ubuntu
 #       IdentityFile ~/.ssh/linker.key
 #       IdentitiesOnly yes
 
-# 2. Conectarse y correr el rollback
+# 2. Connect and run the rollback
 ssh linker
 cd linker1
 bash scripts/rollback.sh v1.0.0
 ```
 
-El script:
+The script:
 
-1. Verifica que el tag solicitado existe (`git rev-parse`).
-2. Detiene `linker1.service`.
-3. Hace `git fetch --tags` y `git checkout <tag>`.
-4. Ejecuta `deploy.sh` para reconstruir y reiniciar el servicio con ese código.
-5. Verifica que el servicio quedó `active (running)` y que `GET /` responde `200`.
-6. Si algo falla en el camino, se detiene (`set -euo pipefail`) e imprime en qué paso quedó, en vez de dejar el sistema a medio migrar silenciosamente.
+1. Verifies the requested tag exists (`git rev-parse`).
+2. Stops `linker1.service`.
+3. Runs `git fetch --tags` and `git checkout <tag>`.
+4. Runs `deploy.sh` to rebuild and restart the service with that code.
+5. Verifies the service ended up `active (running)` and that `GET /` responds `200`.
+6. If anything fails along the way, it stops (`set -euo pipefail`) and prints which step it was on, instead of silently leaving the system half-migrated.
 
-## Procedimiento automatizado (GitHub Actions vía OCI Bastion)
+## Automated procedure (GitHub Actions via OCI Bastion)
 
-El job `rollback` en [`.github/workflows/pipeline.yml`](../.github/workflows/pipeline.yml) está conectado a `deploy-prod` y `validate-prod`: se dispara automáticamente si cualquiera de los dos falla (`if: failure()`). Como la VM no tiene IP pública, no se conecta por SSH directo — usa el composite action del curso `co-eiv-devsecops/material-curso/actions/oci-bastion-deploy@main`, que abre una sesión gestionada contra un OCI Bastion y ejecuta remotamente `cd linker1 && bash scripts/rollback.sh <tag>`, apuntando al tag anterior al que se intentó desplegar.
+The `rollback` job in [`.github/workflows/pipeline.yml`](../.github/workflows/pipeline.yml) is connected to `deploy-prod` and `validate-prod`: it triggers automatically if either one fails (`if: failure()`). Since the VM has no public IP, it doesn't connect via direct SSH — it uses the course's composite action `co-eiv-devsecops/material-curso/actions/oci-bastion-deploy@main`, which opens a managed session against an OCI Bastion and remotely runs `cd linker1 && bash scripts/rollback.sh <tag>`, pointing at the tag prior to the one that was being deployed.
 
-Requiere estas variables/secrets en el repositorio (ver detalle y estado en [`DEPLOYMENT.md`](DEPLOYMENT.md)):
+It requires these variables/secrets in the repository (see details and current status in [`DEPLOYMENT.md`](DEPLOYMENT.md)):
 
-| Nombre | Tipo | Descripción |
+| Name | Type | Description |
 | --- | --- | --- |
-| `OCI_CLI_USER`/`OCI_CLI_TENANCY`/`OCI_CLI_FINGERPRINT`/`OCI_CLI_KEY_CONTENT` | secret | Autenticación de OCI CLI |
-| `OCI_CLI_REGION` | variable | Región de OCI |
-| `OCI_BASTION_OCID` | variable | Bastion usado para la sesión SSH gestionada |
-| `DEPLOYMENT_PRIVATE_KEY` / `DEPLOYMENT_PUBLIC_KEY` | secret / variable | Par de llaves SSH que usa la acción a través del bastión |
-| `OCI_INSTANCE_OCID` | variable | OCID de la VM de producción (el único valor que el equipo debe agregar) |
+| `OCI_CLI_USER`/`OCI_CLI_TENANCY`/`OCI_CLI_FINGERPRINT`/`OCI_CLI_KEY_CONTENT` | secret | OCI CLI authentication |
+| `OCI_CLI_REGION` | variable | OCI region |
+| `OCI_BASTION_OCID` | variable | Bastion used for the managed SSH session |
+| `DEPLOYMENT_PRIVATE_KEY` / `DEPLOYMENT_PUBLIC_KEY` | secret / variable | SSH key pair the action uses through the bastion |
+| `OCI_INSTANCE_OCID` | variable | Production VM's OCID (the only value the team needs to add) |
 
-## Simulación
+## Simulation
 
-Para validar el procedimiento sin depender de un despliegue roto real, `scripts/rollback.sh` se puede correr contra cualquier tag existente en cualquier momento — no depende de que haya habido una falla previa. Pasos para simular:
+To validate the procedure without depending on a real broken deployment, `scripts/rollback.sh` can be run against any existing tag at any time — it doesn't depend on there having been a prior failure. Steps to simulate:
 
 ```bash
-# 1. Confirmar el tag actual desplegado
+# 1. Confirm the currently deployed tag
 git -C /home/ubuntu/linker1 describe --tags
 
-# 2. Ejecutar el rollback hacia el mismo tag (v1.0.0) como prueba,
-#    ya que hoy solo existe un tag publicado
+# 2. Run the rollback to the same tag (v1.0.0) as a test,
+#    since only one tag is currently published
 bash scripts/rollback.sh v1.0.0
 
-# 3. Confirmar que el servicio sigue activo y responde
+# 3. Confirm the service is still active and responding
 curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8080/
 ```
 
-Cuando exista más de un tag publicado (ej. tras un `v1.1.0`), la simulación real es: desplegar `v1.1.0`, luego correr `bash scripts/rollback.sh v1.0.0` y confirmar que el servicio vuelve a responder con el comportamiento de `v1.0.0`.
+Once more than one tag is published (e.g. after a `v1.1.0`), the real simulation is: deploy `v1.1.0`, then run `bash scripts/rollback.sh v1.0.0` and confirm the service goes back to responding with `v1.0.0`'s behavior.
 
-## Criterios de éxito
+## Success criteria
 
-- El servicio queda `active (running)` según `systemctl status linker1.service`.
-- `GET /` responde `200` en menos de 2 minutos desde que se ejecuta el script.
-- El código en la VM (`git describe --tags`) coincide con el tag objetivo del rollback.
-- No se pierde la base de datos SQLite (`deploy.sh` no la toca; vive en `/var/lib/linker1`, fuera del directorio del repo).
+- The service is `active (running)` per `systemctl status linker1.service`.
+- `GET /` responds `200` within 2 minutes of running the script.
+- The code on the VM (`git describe --tags`) matches the rollback's target tag.
+- The SQLite database isn't lost (`deploy.sh` doesn't touch it; it lives in `/var/lib/linker1`, outside the repo directory).
 
-## Documentos relacionados
+## Related documents
 
-- [`deploy.sh`](../deploy.sh) — script de despliegue del que depende el rollback.
-- [`scripts/rollback.sh`](../scripts/rollback.sh) — implementación del rollback.
-- [`.github/workflows/pipeline.yml`](../.github/workflows/pipeline.yml) — pipeline de despliegue continuo con el job de rollback automático.
-- [`.github/workflows/release.yml`](../.github/workflows/release.yml) — genera los tags/releases que el rollback usa como destino.
-- [Estrategia de Despliegue Continuo](DEPLOYMENT.md) — describe el pipeline de `deploy-prod`/`validate-prod` completo.
+- [`deploy.sh`](../deploy.sh) — the deployment script the rollback depends on.
+- [`scripts/rollback.sh`](../scripts/rollback.sh) — the rollback implementation.
+- [`.github/workflows/pipeline.yml`](../.github/workflows/pipeline.yml) — the continuous deployment pipeline with the automatic rollback job.
+- [`.github/workflows/release.yml`](../.github/workflows/release.yml) — generates the tags/releases the rollback targets.
+- [Continuous Deployment Strategy](DEPLOYMENT.md) — describes the full `deploy-prod`/`validate-prod` pipeline.

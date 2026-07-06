@@ -1,75 +1,75 @@
-# Protección de Ramas
+# Branch Protection
 
-## Contexto
+## Context
 
-`main` ya quedó protegida en la entrega anterior (Small Batch Development): requiere PR, 1 aprobación, y los checks `Build`/`Tests`/`Package`/`Summary`/`Smoke Test` en verde antes de mergear.
+`main` was already protected in the previous assignment (Small Batch Development): it requires a PR, 1 approval, and the `Build`/`Tests`/`Package`/`Summary`/`Smoke Test` checks green before merging.
 
-Desde entonces el equipo adoptó `DEV` como la rama de integración real (el flujo actual es: rama de feature → PR hacia `DEV` → aprobación → merge; `main` recibe cambios ya validados en `DEV`). `DEV`, sin embargo, no tenía ninguna regla de protección configurada — se podía pushear directo sin PR ni revisión. Este documento cierra ese hueco.
+Since then, the team adopted `DEV` as the real integration branch (the current flow is: feature branch → PR into `DEV` → approval → merge; `main` receives changes already validated on `DEV`). `DEV`, however, had no protection rule configured — direct pushes with no PR or review were possible. This document closes that gap.
 
-## Estado verificado antes de configurar
+## State verified before configuring
 
 ```bash
 gh api repos/co-eiv-devsecops/linker1/branches/DEV/protection
 ```
 
-Antes de este cambio, la respuesta no incluía `required_status_checks` ni `required_pull_request_reviews` — solo los flags por defecto (`allow_force_pushes: false`, etc.), es decir, sin exigencia real de PR ni de checks para mergear a `DEV`.
+Before this change, the response did not include `required_status_checks` or `required_pull_request_reviews` — only the default flags (`allow_force_pushes: false`, etc.), i.e. no real PR or check requirement to merge into `DEV`.
 
-## Reglas aplicadas a `DEV`
+## Rules applied to `DEV`
 
-- **Requiere Pull Request**: no se permite push directo a `DEV`.
-- **1 aprobación mínima**, y se descartan aprobaciones previas si se suben nuevos commits (`dismiss_stale_reviews`).
-- **Checks de estado obligatorios** (deben pasar en verde antes de mergear), tomados de `.github/workflows/ci.yml`, el único workflow que realmente corre sobre un `pull_request` hacia `DEV`:
+- **Requires a Pull Request**: direct pushes to `DEV` are not allowed.
+- **1 minimum approval**, and previous approvals are dismissed if new commits are pushed (`dismiss_stale_reviews`).
+- **Required status checks** (must pass green before merging), taken from `.github/workflows/ci.yml`, the only workflow that actually runs on a `pull_request` targeting `DEV`:
   - `Build`
   - `Tests`
   - `Package`
   - `Summary`
   - `Smoke Test`
-- **`strict: true`**: la rama debe estar actualizada con `DEV` antes de mergear.
-- **Conversaciones resueltas**: no se puede mergear con comentarios de revisión sin resolver.
-- **Sin force-push ni borrado de la rama.**
-- **`enforce_admins: true`**: las reglas aplican también a administradores del repo, sin bypass.
+- **`strict: true`**: the branch must be up to date with `DEV` before merging.
+- **Resolved conversations**: cannot merge with unresolved review comments.
+- **No force-push or branch deletion.**
+- **`enforce_admins: true`**: the rules also apply to repo administrators, no bypass.
 
-No se incluyeron como requeridos ni `API Tests (Live)` ni los jobs de `.github/workflows/pipeline.yml` (`Deploy to Development`, `Validate Development`, `Deploy to Production`, `Rollback`). Ese workflow solo se dispara con `on: push` (y `workflow_dispatch`), nunca con `pull_request` — sus jobs simplemente no existen como checks sobre un PR. Esto se descubrió de la forma dura: la primera versión de esta configuración sí los incluyó como requeridos, lo que dejó **todo PR hacia `DEV` bloqueado permanentemente** (`mergeStateStatus: BLOCKED`, sin ningún check posible que lo satisficiera). Se corrigió de inmediato al detectarlo en el primer PR real (#38) que pasó por esta regla.
+Neither `API Tests (Live)` nor the jobs in `.github/workflows/pipeline.yml` (`Deploy to Development`, `Validate Development`, `Deploy to Production`, `Rollback`) were included as required. That workflow only triggers on `push` (and `workflow_dispatch`), never on `pull_request` — its jobs simply don't exist as checks on a PR. This was discovered the hard way: the first version of this configuration did include them as required, which left **every PR into `DEV` permanently blocked** (`mergeStateStatus: BLOCKED`, with no possible check to satisfy it). It was fixed immediately upon detecting it on the first real PR (#38) that went through this rule.
 
-`required_linear_history` se dejó en `false` para `DEV` (a diferencia de `main`): al ser la rama de integración de varias features en paralelo, tiene sentido permitir merge commits; `main` sigue usando squash-merge como único punto de verdad.
+`required_linear_history` was left as `false` for `DEV` (unlike `main`): since it's the integration branch for several parallel features, allowing merge commits makes sense there; `main` still uses squash-merge as the single source of truth.
 
-## Cómo se aplicó
+## How it was applied
 
 ```bash
 gh api repos/co-eiv-devsecops/linker1/branches/DEV/protection \
   -X PUT --input docs/protection-config.json
 ```
 
-Usando el archivo [`protection-config.json`](protection-config.json) de este mismo directorio.
+Using the [`protection-config.json`](protection-config.json) file in this same directory.
 
-## Verificación
+## Verification
 
 ```bash
 gh api repos/co-eiv-devsecops/linker1/branches/DEV/protection
 ```
 
-Debe devolver `required_status_checks.contexts` con los 5 checks listados arriba y `required_pull_request_reviews.required_approving_review_count: 1`.
+Should return `required_status_checks.contexts` with the 5 checks listed above and `required_pull_request_reviews.required_approving_review_count: 1`.
 
-Como prueba adicional, se puede intentar un push directo a `DEV` (sin PR) desde un checkout local:
+As an additional test, you can try a direct push to `DEV` (without a PR) from a local checkout:
 
 ```bash
 git checkout DEV
-git commit --allow-empty -m "test: push directo bloqueado"
+git commit --allow-empty -m "test: direct push blocked"
 git push origin DEV
 ```
 
-Debe rechazarse con un error indicando que se requiere un pull request.
+It should be rejected with an error stating that a pull request is required.
 
-## Impacto en el flujo del equipo
+## Impact on the team's workflow
 
-- Todo cambio hacia `DEV` pasa por una rama `feature/*`, `fix/*` o `chore/*` y un PR.
-- Cada PR necesita al menos una aprobación de otro integrante.
-- Los checks de CI/CD deben pasar antes de poder mergear — ya no es posible mergear con el pipeline roto.
-- `main` conserva sus propias reglas (ya configuradas), heredando solo cambios que ya pasaron por `DEV`.
+- Every change into `DEV` goes through a `feature/*`, `fix/*`, or `chore/*` branch and a PR.
+- Every PR needs at least one approval from another team member.
+- CI/CD checks must pass before merging — it's no longer possible to merge with a broken pipeline.
+- `main` keeps its own rules (already configured), inheriting only changes that already passed through `DEV`.
 
-## Documentos relacionados
+## Related documents
 
-- [Estrategia de Rollback](ROLLBACK_STRATEGY.md)
+- [Rollback Strategy](ROLLBACK_STRATEGY.md)
 - [`.github/CONTRIBUTING.md`](../.github/CONTRIBUTING.md)
 - [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)
 - [`.github/workflows/pipeline.yml`](../.github/workflows/pipeline.yml)

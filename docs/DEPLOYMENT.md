@@ -1,64 +1,64 @@
-# Estrategia de Despliegue Continuo
+# Continuous Deployment Strategy
 
-## Contexto
+## Context
 
-Linker1 corre en una única VM de OCI (producción, `https://1.n-la-c.app`) creada con la IaC de `infra/` (`assign_public_ip = false`: la instancia no tiene IP pública). Antes de este cambio, `.github/workflows/pipeline.yml` no desplegaba nada real: los jobs `deploy-dev`, `validate-dev` y `deploy-prod` eran placeholders que solo hacían `echo`, y el único job real (`rollback`) asumía SSH directo a un `VM_HOST` público que nunca existió ni se configuró.
+Linker1 runs on a single OCI VM (production, `https://1.n-la-c.app`) created with the IaC in `infra/` (`assign_public_ip = false`: the instance has no public IP). Before this change, `.github/workflows/pipeline.yml` didn't deploy anything real: the `deploy-dev`, `validate-dev`, and `deploy-prod` jobs were placeholders that only did `echo`, and the one real job (`rollback`) assumed direct SSH to a public `VM_HOST` that never existed or was configured.
 
-El mecanismo real, indicado por el profesor del curso, es un composite action compartido (`co-eiv-devsecops/material-curso/actions/oci-bastion-deploy@main`) que llega a la VM a través de un **OCI Bastion** (sesión SSH gestionada por OCI, sin necesidad de IP pública). Este documento describe cómo quedó armado el pipeline con ese mecanismo.
+The real mechanism, provided by the course instructor, is a shared composite action (`co-eiv-devsecops/material-curso/actions/oci-bastion-deploy@main`) that reaches the VM through an **OCI Bastion** (an SSH session managed by OCI, with no public IP needed). This document describes how the pipeline was set up around that mechanism.
 
-La acción descarga un artefacto de GitHub Actions, abre una sesión `bastion session create-managed-ssh` contra `instance-id` autenticándose con `env.DEPLOYMENT_PUBLIC_KEY`/`env.OCI_BASTION_OCID`, copia el contenido del artefacto a `target-path` (con `sudo tar -x`), ejecuta `script` por SSH con el directorio de trabajo ya puesto en `target-path` y la variable `DEPLOY_PATH` apuntando ahí, y al final borra la sesión de bastión. Los inputs `artifact-name` y `target-path` son **obligatorios** (`required: true`) aunque no se necesite un artefacto nuevo, así que el job `rollback` reutiliza el artefacto `linker-app` que ya subió `Build` en la misma corrida solo para satisfacer ese requisito. La acción no tiene inputs `ssh-public-key` ni `bastion-id` (a diferencia de la plantilla que compartió el profesor); esos valores los toma de `env.DEPLOYMENT_PUBLIC_KEY`/`env.OCI_BASTION_OCID`, que sí están declarados en el bloque `env:` del job.
+The action downloads a GitHub Actions artifact, opens a `bastion session create-managed-ssh` session against `instance-id`, authenticating with `env.DEPLOYMENT_PUBLIC_KEY`/`env.OCI_BASTION_OCID`, copies the artifact's contents to `target-path` (via `sudo tar -x`), runs `script` over SSH with the working directory already set to `target-path` and the `DEPLOY_PATH` variable pointing there, and deletes the bastion session at the end. The `artifact-name` and `target-path` inputs are **required** (`required: true`) even when a new artifact isn't needed, so the `rollback` job reuses the `linker-app` artifact that `Build` already uploaded in the same run, purely to satisfy that requirement. The action has no `ssh-public-key` or `bastion-id` inputs (unlike the template the instructor shared); it takes those values from `env.DEPLOYMENT_PUBLIC_KEY`/`env.OCI_BASTION_OCID`, which are indeed declared in the job's `env:` block.
 
-No existe todavía una VM separada para el ambiente de desarrollo, así que este pipeline solo cubre `prod`. Los jobs `deploy-dev`/`validate-dev` se retiraron del archivo en vez de dejarse como simulación; cuando exista una segunda VM se pueden agregar siguiendo el mismo patrón que `deploy-prod`/`validate-prod`.
+There is no separate VM for a development environment yet, so this pipeline only covers `prod`. The `deploy-dev`/`validate-dev` jobs were removed from the file instead of being left as a simulation; once a second VM exists, they can be added following the same pattern as `deploy-prod`/`validate-prod`.
 
-## Jobs de `.github/workflows/pipeline.yml`
+## Jobs in `.github/workflows/pipeline.yml`
 
-Se dispara en cada `push` a `main` (y manualmente vía `workflow_dispatch`):
+Triggers on every `push` to `main` (and manually via `workflow_dispatch`):
 
-1. **`Build`**: compila el jar (`mvn package -DskipTests`) y lo sube como artefacto `linker-app`. Es un job independiente del `package` de `ci.yml` (los artefactos de `actions/upload-artifact` no cruzan entre workflows distintos sin plumbing extra), así que se duplica este paso barato en vez de complicar la descarga cross-workflow.
-2. **`deploy-prod`**: corre en el contexto del GitHub Environment `prod` (scoping de secrets/variables). Usa `oci-bastion-deploy` para subir el jar a la VM vía el bastión y ejecutar un script remoto que:
-   - copia el jar a `/opt/linker1/linker1.jar`
-   - reescribe el unit de `systemd` (`linker1.service`), incluyendo ahora `Environment="LD_SDK_KEY=..."` (antes faltaba: `Main.java` hace `System.exit(1)` si esa variable no está presente)
-   - reinicia el servicio y verifica `systemctl is-active` + `curl localhost:8080` → `200`
-3. **`validate-prod`**: chequeos de solo lectura contra `https://1.n-la-c.app` (`/`, `/app.js`, `/styles.css`, 404 en ruta inexistente). No repite las pruebas mutantes (crear link, alias, conflicto) porque esas ya las cubre el job `api-tests` (Newman) de `ci.yml` contra la misma instancia productiva; correrlas de nuevo en cada deploy solo ensuciaría la base de datos real.
-4. **`rollback`**: se dispara si `deploy-prod` o `validate-prod` fallan. Resuelve el tag SemVer anterior (igual que antes) y ahora usa el mismo `oci-bastion-deploy` (en vez de SSH crudo) para correr `bash scripts/rollback.sh <tag>` sobre el checkout que ya existe en la VM.
+1. **`Build`**: compiles the jar (`mvn package -DskipTests`) and uploads it as the `linker-app` artifact. This is a job independent from `ci.yml`'s `package` (artifacts from `actions/upload-artifact` don't cross between different workflows without extra plumbing), so this cheap step is duplicated instead of complicating cross-workflow downloads.
+2. **`deploy-prod`**: runs in the context of the `prod` GitHub Environment (secrets/variables scoping). Uses `oci-bastion-deploy` to upload the jar to the VM through the bastion and run a remote script that:
+   - copies the jar to `/opt/linker1/linker1.jar`
+   - rewrites the `systemd` unit (`linker1.service`), now including `Environment="LD_SDK_KEY=..."` (previously missing: `Main.java` calls `System.exit(1)` if that variable isn't present)
+   - restarts the service and verifies `systemctl is-active` + `curl localhost:8080` → `200`
+3. **`validate-prod`**: read-only checks against `https://1.n-la-c.app` (`/`, `/app.js`, `/styles.css`, 404 on a nonexistent route). It doesn't repeat the mutating tests (create link, alias, conflict) because those are already covered by `ci.yml`'s `api-tests` job (Newman) against the same production instance; running them again on every deploy would just pollute the real database.
+4. **`rollback`**: triggers if `deploy-prod` or `validate-prod` fail. Resolves the previous SemVer tag (same as before) and now uses the same `oci-bastion-deploy` action (instead of raw SSH) to run `bash scripts/rollback.sh <tag>` on the checkout that already exists on the VM.
 
-## Sobre la aprobación manual del Environment `prod`
+## About manual approval on the `prod` Environment
 
-GitHub permite configurar "required reviewers" en un Environment para pausar un deploy hasta que alguien lo apruebe manualmente — pero esa protección **no está disponible para repos privados en el plan gratuito de GitHub** (solo en repos públicos o en planes Team/Enterprise). Se verificó en Settings > Environments > `prod`: la página no ofrece la sección de reviewers, solo "Deployment branches and tags" y secrets/variables.
+GitHub lets you configure "required reviewers" on an Environment to pause a deploy until someone manually approves it — but that protection **is not available for private repos on GitHub's free plan** (only on public repos or Team/Enterprise plans). This was verified in Settings > Environments > `prod`: the page doesn't offer the reviewers section, only "Deployment branches and tags" and secrets/variables.
 
-En la práctica esto no deja el despliegue sin control: el gate real ya lo da la protección de rama en `main` (PR + 1 aprobación obligatoria + checks de CI en verde, ver [`BRANCH_PROTECTION.md`](BRANCH_PROTECTION.md)) — nada llega a `main` (y por lo tanto dispara `deploy-prod`) sin revisión humana previa. El `environment: prod` en el job se mantiene igual porque sirve para el scoping de secrets/variables, aunque no añada una pausa adicional.
+In practice this doesn't leave the deployment uncontrolled: the real gate is already provided by `main`'s branch protection (PR + 1 required approval + green CI checks, see [`BRANCH_PROTECTION.md`](BRANCH_PROTECTION.md)) — nothing reaches `main` (and therefore triggers `deploy-prod`) without prior human review. The job's `environment: prod` is kept as-is because it's still useful for secrets/variables scoping, even though it doesn't add an additional pause.
 
-## Secrets y variables requeridos
+## Required secrets and variables
 
-Ya configurados en el repositorio (verificado en Settings > Secrets and variables > Actions):
+Already configured in the repository (verified in Settings > Secrets and variables > Actions):
 
-| Nombre | Tipo | Nivel | Uso |
+| Name | Type | Level | Use |
 | --- | --- | --- | --- |
-| `OCI_CLI_USER` | secret | repo | Autenticación de OCI CLI |
-| `OCI_CLI_TENANCY` | secret | organización | Autenticación de OCI CLI |
-| `OCI_CLI_FINGERPRINT` | secret | repo | Autenticación de OCI CLI |
-| `OCI_CLI_KEY_CONTENT` | secret | repo | Clave privada de la API key de OCI |
-| `OCI_CLI_REGION` | variable | organización | Región de OCI (`sa-bogota-1`) |
-| `OCI_BASTION_OCID` | variable | organización | Bastion de OCI usado para la sesión SSH gestionada |
-| `DEPLOYMENT_PRIVATE_KEY` | secret | repo | Llave privada SSH usada por la acción para conectarse a través del bastión |
-| `DEPLOYMENT_PUBLIC_KEY` | secret | repo | Llave pública correspondiente, autorizada en la sesión de bastión |
-| `LD_SDK_KEY` | secret | repo | Ya la usaba el job `smoke` de `ci.yml`; se reutiliza para el `systemd` unit de prod |
-| `OCI_INSTANCE_OCID` | variable | repo | OCID de `vm-linker1-app`, obtenido con `oci compute instance list --compartment-id $CMP_ID` desde Cloud Shell (la VM no fue creada con Terraform, así que `terraform output` no sirve para esto) |
+| `OCI_CLI_USER` | secret | repo | OCI CLI authentication |
+| `OCI_CLI_TENANCY` | secret | organization | OCI CLI authentication |
+| `OCI_CLI_FINGERPRINT` | secret | repo | OCI CLI authentication |
+| `OCI_CLI_KEY_CONTENT` | secret | repo | Private key of the OCI API key |
+| `OCI_CLI_REGION` | variable | organization | OCI region (`sa-bogota-1`) |
+| `OCI_BASTION_OCID` | variable | organization | OCI Bastion used for the managed SSH session |
+| `DEPLOYMENT_PRIVATE_KEY` | secret | repo | SSH private key the action uses to connect through the bastion |
+| `DEPLOYMENT_PUBLIC_KEY` | secret | repo | The matching public key, authorized on the bastion session |
+| `LD_SDK_KEY` | secret | repo | Already used by `ci.yml`'s `smoke` job; reused for prod's `systemd` unit |
+| `OCI_INSTANCE_OCID` | variable | repo | OCID of `vm-linker1-app`, obtained via `oci compute instance list --compartment-id $CMP_ID` from Cloud Shell (the VM wasn't created with Terraform, so `terraform output` doesn't work for this) |
 
-Nota: `DEPLOYMENT_PUBLIC_KEY` es un **secret**, no una variable, a pesar de que la plantilla original del profesor lo referenciaba como `vars.DEPLOYMENT_PUBLIC_KEY` — `pipeline.yml` ya quedó ajustado para leerlo como `secrets.DEPLOYMENT_PUBLIC_KEY`.
+Note: `DEPLOYMENT_PUBLIC_KEY` is a **secret**, not a variable, even though the instructor's original template referenced it as `vars.DEPLOYMENT_PUBLIC_KEY` — `pipeline.yml` was already adjusted to read it as `secrets.DEPLOYMENT_PUBLIC_KEY`.
 
-También existe un secret `OCI_VM_SSHKEY_CONTENT` en el repo que no usa este pipeline ni la plantilla del profesor — no se tocó, queda sin uso hasta que se identifique para qué era.
+There is also an `OCI_VM_SSHKEY_CONTENT` secret in the repo that isn't used by this pipeline or the instructor's template — it was left untouched, unused until it's identified what it was for.
 
-## Riesgos abiertos / a verificar
+## Open risks / things to verify
 
-- El `script:` remoto asume que el usuario `ubuntu` tiene `sudo` sin contraseña en la VM (igual que ya asume `deploy.sh`). Esto es coherente con lo que la propia acción necesita para su paso de copiar el artefacto (`sudo tar -C $target_q -xf -`), así que si el bastión no diera ese acceso, el propio paso "Copy artifact to target path" de la acción ya fallaría antes de llegar a nuestro script.
-- El job `rollback` asume que el checkout persistente del repo vive en `/home/ubuntu/linker1` en la VM (coincide con `infra/cloud-init.yaml`, que clona ahí en el primer boot) — si algún despliegue manual futuro usa otra ruta, hay que ajustar esa línea en `pipeline.yml`.
-- La sesión de bastión tiene un TTL de 1800s (default de la acción) — de sobra para un deploy normal, pero si el `mvn package`/despliegue llegara a tardar más, el `session-ttl` es un input configurable a subir.
+- The remote `script:` assumes the `ubuntu` user has passwordless `sudo` on the VM (same assumption `deploy.sh` already makes). This is consistent with what the action itself needs for its artifact-copy step (`sudo tar -C $target_q -xf -`), so if the bastion didn't grant that access, the action's own "Copy artifact to target path" step would already fail before reaching our script.
+- The `rollback` job assumes the repo's persistent checkout lives at `/home/ubuntu/linker1` on the VM (matches `infra/cloud-init.yaml`, which clones it there on first boot) — if some future manual deployment uses a different path, that line in `pipeline.yml` needs adjusting.
+- The bastion session has a 1800s TTL (the action's default) — plenty for a normal deploy, but if `mvn package`/deployment ever takes longer, `session-ttl` is a configurable input to raise.
 
-## Documentos relacionados
+## Related documents
 
-- [Estrategia de Rollback](ROLLBACK_STRATEGY.md)
+- [Rollback Strategy](ROLLBACK_STRATEGY.md)
 - [`.github/workflows/pipeline.yml`](../.github/workflows/pipeline.yml)
 - [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)
 - [`deploy.sh`](../deploy.sh)
-- [`infra/`](../infra/) — Terraform de la VM
+- [`infra/`](../infra/) — the VM's Terraform
