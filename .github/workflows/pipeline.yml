@@ -3,59 +3,143 @@ name: Deployment Pipeline
 on:
   push:
     branches:
-      - DEV
       - main
   workflow_dispatch:
 
 jobs:
-  deploy-dev:
-    name: Deploy to Development
-    if: github.ref == 'refs/heads/DEV'
-    runs-on: ubuntu-latest
-
-    environment:
-      name: dev
-
-    steps:
-      - name: Deploy to Development
-        run: |
-          echo "=== DEVELOPMENT DEPLOYMENT ==="
-          echo "Deploying application to Development environment..."
-          echo "Deployment completed successfully."
-
-  validate-dev:
-    name: Validate Development
-    if: github.ref == 'refs/heads/DEV'
-    needs: deploy-dev
+  Build:
+    name: Build
     runs-on: ubuntu-latest
 
     steps:
-      - name: Run smoke tests
-        run: |
-          echo "Running smoke tests in Development..."
-          echo "All tests passed."
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Build application package
+        run: mvn -B -ntp package -DskipTests
+
+      - name: Upload packaged jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: linker-app
+          path: target/linker1-1.0-jar-with-dependencies.jar
 
   deploy-prod:
     name: Deploy to Production
     if: github.ref == 'refs/heads/main'
+    needs: Build
     runs-on: ubuntu-latest
 
     environment:
       name: prod
 
+    env:
+      DEPLOYMENT_PRIVATE_KEY: ${{ secrets.DEPLOYMENT_PRIVATE_KEY }}
+      DEPLOYMENT_PUBLIC_KEY: ${{ secrets.DEPLOYMENT_PUBLIC_KEY }}
+      OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
+      OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+      OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+      OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+      OCI_CLI_REGION: ${{ vars.OCI_CLI_REGION }}
+      OCI_BASTION_OCID: ${{ vars.OCI_BASTION_OCID }}
+
     steps:
-      - name: Deploy to Production
+      - name: Deploy via OCI Bastion
+        uses: co-eiv-devsecops/material-curso/actions/oci-bastion-deploy@main
+        with:
+          ssh-public-key: ${{ secrets.DEPLOYMENT_PUBLIC_KEY }}
+          instance-id: ${{ vars.OCI_INSTANCE_OCID }}
+          bastion-id: ${{ vars.OCI_BASTION_OCID }}
+          artifact-name: linker-app
+          target-path: /tmp/deploy/linker/${{ github.sha }}
+          target-os-username: ubuntu
+          oci-cli-cache-version: v1
+          script: |
+            set -euo pipefail
+
+            SRC_DIR="/tmp/deploy/linker/${{ github.sha }}"
+            JAR_SRC=$(find "$SRC_DIR" -name '*.jar' | head -n 1)
+
+            sudo mkdir -p /opt/linker1
+            sudo mkdir -p /var/lib/linker1
+            sudo cp "$JAR_SRC" /opt/linker1/linker1.jar
+            sudo chown -R ubuntu:ubuntu /opt/linker1
+            sudo chown -R ubuntu:ubuntu /var/lib/linker1
+
+            sudo systemctl stop linker1.service || true
+
+            sudo tee /etc/systemd/system/linker1.service > /dev/null <<EOF
+            [Unit]
+            Description=Linker1 URL Shortener
+            After=network.target
+
+            [Service]
+            Type=simple
+            WorkingDirectory=/opt/linker1
+            ExecStart=/usr/bin/java -jar /opt/linker1/linker1.jar
+            Restart=always
+            RestartSec=5
+            User=ubuntu
+            Environment="LINKER_PORT=8080"
+            Environment="LINKER_DB_PATH=/var/lib/linker1/linker1.db"
+            Environment="LD_SDK_KEY=${{ secrets.LD_SDK_KEY }}"
+
+            [Install]
+            WantedBy=multi-user.target
+            EOF
+
+            sudo systemctl daemon-reload
+            sudo systemctl enable linker1.service
+            sudo systemctl restart linker1.service
+
+            sleep 3
+            systemctl is-active --quiet linker1.service
+
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/)
+            test "$STATUS" = "200"
+
+  validate-prod:
+    name: Validate Production
+    needs: deploy-prod
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Smoke test production (read-only)
         run: |
-          echo "=== PRODUCTION DEPLOYMENT ==="
-          echo "Promoting validated artifact to Production..."
-          echo "Waiting for GitHub Environment approval..."
-          echo "Production deployment completed successfully."
+          BASE="https://1.n-la-c.app"
+
+          curl -sf "$BASE/" > /dev/null
+          curl -sf "$BASE/app.js" > /dev/null
+          curl -sf "$BASE/styles.css" > /dev/null
+
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/does-not-exist-xyz")
+          test "$STATUS" = "404"
 
   rollback:
     name: Rollback
     if: failure()
-    needs: deploy-prod
+    needs: [deploy-prod, validate-prod]
     runs-on: ubuntu-latest
+
+    environment:
+      name: prod
+
+    env:
+      DEPLOYMENT_PRIVATE_KEY: ${{ secrets.DEPLOYMENT_PRIVATE_KEY }}
+      DEPLOYMENT_PUBLIC_KEY: ${{ secrets.DEPLOYMENT_PUBLIC_KEY }}
+      OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
+      OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+      OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+      OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+      OCI_CLI_REGION: ${{ vars.OCI_CLI_REGION }}
+      OCI_BASTION_OCID: ${{ vars.OCI_BASTION_OCID }}
 
     steps:
       - name: Checkout repository
@@ -82,26 +166,24 @@ jobs:
           echo "Version de rollback: $PREVIOUS_TAG"
           echo "tag=$PREVIOUS_TAG" >> "$GITHUB_OUTPUT"
 
-      - name: Rollback via SSH
-        env:
-          VM_HOST: ${{ secrets.VM_HOST }}
-          VM_USER: ${{ secrets.VM_USER }}
-        run: |
-          echo "${{ secrets.VM_SSH_KEY }}" > vm_key.pem
-          chmod 600 vm_key.pem
-
-          ssh -o StrictHostKeyChecking=no -i vm_key.pem "$VM_USER@$VM_HOST" \
-            "cd linker1 && bash scripts/rollback.sh ${{ steps.previous.outputs.tag }}"
-
-          rm -f vm_key.pem
+      - name: Rollback via OCI Bastion
+        uses: co-eiv-devsecops/material-curso/actions/oci-bastion-deploy@main
+        with:
+          ssh-public-key: ${{ secrets.DEPLOYMENT_PUBLIC_KEY }}
+          instance-id: ${{ vars.OCI_INSTANCE_OCID }}
+          bastion-id: ${{ vars.OCI_BASTION_OCID }}
+          target-os-username: ubuntu
+          oci-cli-cache-version: v1
+          script: |
+            set -euo pipefail
+            cd linker1
+            bash scripts/rollback.sh ${{ steps.previous.outputs.tag }}
 
       - name: Verify rollback
-        env:
-          VM_HOST: ${{ secrets.VM_HOST }}
         run: |
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://$VM_HOST:8080/" || echo "000")
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://1.n-la-c.app/" || echo "000")
           if [ "$STATUS" != "200" ]; then
-            echo "El servicio no respondió correctamente tras el rollback (status: $STATUS)."
+            echo "El servicio no respondio correctamente tras el rollback (status: $STATUS)."
             exit 1
           fi
           echo "Rollback verificado: el servicio responde 200 en ${{ steps.previous.outputs.tag }}."
