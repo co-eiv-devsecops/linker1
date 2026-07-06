@@ -21,11 +21,8 @@ public class Main {
             System.getenv().getOrDefault("LINKER_PORT", "8080")
         );
 
-        var app = Javalin.create().start(port);
-
         var repository = new LinkRepository(conn);
         var service = new LinkService(repository);
-
 
         String ldSdkKey = System.getenv("LD_SDK_KEY");
         if (ldSdkKey == null || ldSdkKey.isBlank()) {
@@ -51,8 +48,13 @@ public class Main {
         System.out.println("LaunchDarkly initialized successfully.");
 
         FeatureFlags featureFlags = new FeatureFlags(ldClient);
+
+        // Routes are registered before the server starts listening, so the port
+        // never accepts a connection while it would otherwise 404 with no routes.
+        var app = Javalin.create();
         new StaticRoutes(featureFlags).register(app);
         new LinkRoutes(service).register(app);
+        app.start(port);
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             try {
