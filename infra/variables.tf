@@ -24,6 +24,12 @@ variable "repo_url" {
   default = "https://github.com/co-eiv-devsecops/linker1"
 }
 
+variable "ld_sdk_key" {
+  description = "LaunchDarkly SDK key inyectada en el systemd unit del servicio linker1"
+  type        = string
+  sensitive   = true
+}
+
 variable "instance_shape" {
   type    = string
   default = "VM.Standard.E5.Flex"

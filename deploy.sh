@@ -85,6 +85,13 @@ sudo chown -R www-data:www-data "$WEB_DIR"
 
 # 7. Systemd service
 echo "✓ Creating systemd service..."
+# LD_SDK_KEY no llega por secrets aqui (este script corre directo en la VM);
+# si no se pasa explicitamente como variable de entorno, se preserva el valor
+# que ya estuviera configurado en el unit existente para no dejar el servicio
+# sin la key en un rollback o redeploy manual.
+EXISTING_LD_SDK_KEY=$(sudo grep -oP '(?<=Environment="LD_SDK_KEY=)[^"]*' /etc/systemd/system/linker1.service 2>/dev/null || true)
+LD_SDK_KEY="${LD_SDK_KEY:-$EXISTING_LD_SDK_KEY}"
+
 sudo tee /etc/systemd/system/linker1.service > /dev/null <<EOF
 [Unit]
 Description=Linker1 URL Shortener
@@ -99,6 +106,7 @@ RestartSec=5
 User=ubuntu
 Environment="LINKER_PORT=8080"
 Environment="LINKER_DB_PATH=$DB_DIR/linker1.db"
+Environment="LD_SDK_KEY=$LD_SDK_KEY"
 
 [Install]
 WantedBy=multi-user.target
