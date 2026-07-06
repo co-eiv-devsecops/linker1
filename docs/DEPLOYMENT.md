@@ -6,6 +6,8 @@ Linker1 corre en una única VM de OCI (producción, `https://1.n-la-c.app`) crea
 
 El mecanismo real, indicado por el profesor del curso, es un composite action compartido (`co-eiv-devsecops/material-curso/actions/oci-bastion-deploy@main`) que llega a la VM a través de un **OCI Bastion** (sesión SSH gestionada por OCI, sin necesidad de IP pública). Este documento describe cómo quedó armado el pipeline con ese mecanismo.
 
+La acción descarga un artefacto de GitHub Actions, abre una sesión `bastion session create-managed-ssh` contra `instance-id` autenticándose con `env.DEPLOYMENT_PUBLIC_KEY`/`env.OCI_BASTION_OCID`, copia el contenido del artefacto a `target-path` (con `sudo tar -x`), ejecuta `script` por SSH con el directorio de trabajo ya puesto en `target-path` y la variable `DEPLOY_PATH` apuntando ahí, y al final borra la sesión de bastión. Los inputs `artifact-name` y `target-path` son **obligatorios** (`required: true`) aunque no se necesite un artefacto nuevo, así que el job `rollback` reutiliza el artefacto `linker-app` que ya subió `Build` en la misma corrida solo para satisfacer ese requisito. La acción no tiene inputs `ssh-public-key` ni `bastion-id` (a diferencia de la plantilla que compartió el profesor); esos valores los toma de `env.DEPLOYMENT_PUBLIC_KEY`/`env.OCI_BASTION_OCID`, que sí están declarados en el bloque `env:` del job.
+
 No existe todavía una VM separada para el ambiente de desarrollo, así que este pipeline solo cubre `prod`. Los jobs `deploy-dev`/`validate-dev` se retiraron del archivo en vez de dejarse como simulación; cuando exista una segunda VM se pueden agregar siguiendo el mismo patrón que `deploy-prod`/`validate-prod`.
 
 ## Jobs de `.github/workflows/pipeline.yml`
@@ -49,9 +51,9 @@ También existe un secret `OCI_VM_SSHKEY_CONTENT` en el repo que no usa este pip
 
 ## Riesgos abiertos / a verificar
 
-- No fue posible inspeccionar el `action.yml` real de `oci-bastion-deploy` (repo privado `co-eiv-devsecops/material-curso`). Antes de confiar completamente en el pipeline, alguien con acceso debería confirmar:
-  - Si `artifact-name` es un input obligatorio (el job `rollback` lo omite a propósito, porque no necesita un jar nuevo).
-  - Si el `script:` corre como `ubuntu` con `sudo` sin contraseña ya configurado en la sesión del bastión (igual que asume `deploy.sh` hoy).
+- El `script:` remoto asume que el usuario `ubuntu` tiene `sudo` sin contraseña en la VM (igual que ya asume `deploy.sh`). Esto es coherente con lo que la propia acción necesita para su paso de copiar el artefacto (`sudo tar -C $target_q -xf -`), así que si el bastión no diera ese acceso, el propio paso "Copy artifact to target path" de la acción ya fallaría antes de llegar a nuestro script.
+- El job `rollback` asume que el checkout persistente del repo vive en `/home/ubuntu/linker1` en la VM (coincide con `infra/cloud-init.yaml`, que clona ahí en el primer boot) — si algún despliegue manual futuro usa otra ruta, hay que ajustar esa línea en `pipeline.yml`.
+- La sesión de bastión tiene un TTL de 1800s (default de la acción) — de sobra para un deploy normal, pero si el `mvn package`/despliegue llegara a tardar más, el `session-ttl` es un input configurable a subir.
 
 ## Documentos relacionados
 

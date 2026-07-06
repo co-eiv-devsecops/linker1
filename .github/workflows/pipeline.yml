@@ -54,9 +54,7 @@ jobs:
       - name: Deploy via OCI Bastion
         uses: co-eiv-devsecops/material-curso/actions/oci-bastion-deploy@main
         with:
-          ssh-public-key: ${{ secrets.DEPLOYMENT_PUBLIC_KEY }}
           instance-id: ${{ vars.OCI_INSTANCE_OCID }}
-          bastion-id: ${{ vars.OCI_BASTION_OCID }}
           artifact-name: linker-app
           target-path: /tmp/deploy/linker/${{ github.sha }}
           target-os-username: ubuntu
@@ -64,8 +62,7 @@ jobs:
           script: |
             set -euo pipefail
 
-            SRC_DIR="/tmp/deploy/linker/${{ github.sha }}"
-            JAR_SRC=$(find "$SRC_DIR" -name '*.jar' | head -n 1)
+            JAR_SRC=$(find "$DEPLOY_PATH" -maxdepth 1 -name '*.jar' | head -n 1)
 
             sudo mkdir -p /opt/linker1
             sudo mkdir -p /var/lib/linker1
@@ -169,14 +166,17 @@ jobs:
       - name: Rollback via OCI Bastion
         uses: co-eiv-devsecops/material-curso/actions/oci-bastion-deploy@main
         with:
-          ssh-public-key: ${{ secrets.DEPLOYMENT_PUBLIC_KEY }}
           instance-id: ${{ vars.OCI_INSTANCE_OCID }}
-          bastion-id: ${{ vars.OCI_BASTION_OCID }}
+          # rollback.sh reconstruye desde el checkout git ya existente en la VM,
+          # no necesita un jar nuevo — se reusa el artefacto ya subido por Build
+          # solo porque artifact-name/target-path son inputs obligatorios de esta accion.
+          artifact-name: linker-app
+          target-path: /tmp/deploy/linker/rollback-${{ github.sha }}
           target-os-username: ubuntu
           oci-cli-cache-version: v1
           script: |
             set -euo pipefail
-            cd linker1
+            cd /home/ubuntu/linker1
             bash scripts/rollback.sh ${{ steps.previous.outputs.tag }}
 
       - name: Verify rollback
