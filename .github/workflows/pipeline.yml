@@ -149,27 +149,28 @@ jobs:
         run: |
           CURRENT_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
           if [ -z "$CURRENT_TAG" ]; then
-            echo "No hay tags publicados; no se puede determinar la version anterior."
+            echo "No published tags found; cannot determine the previous version."
             exit 1
           fi
 
           PREVIOUS_TAG=$(git tag -l 'v*.*.*' --sort=-version:refname | grep -A1 "^${CURRENT_TAG}$" | tail -1)
           if [ -z "$PREVIOUS_TAG" ] || [ "$PREVIOUS_TAG" = "$CURRENT_TAG" ]; then
-            echo "No existe una version anterior a $CURRENT_TAG para hacer rollback."
+            echo "No version prior to $CURRENT_TAG exists to roll back to."
             exit 1
           fi
 
-          echo "Version actual: $CURRENT_TAG"
-          echo "Version de rollback: $PREVIOUS_TAG"
+          echo "Current version: $CURRENT_TAG"
+          echo "Rollback version: $PREVIOUS_TAG"
           echo "tag=$PREVIOUS_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Rollback via OCI Bastion
         uses: co-eiv-devsecops/material-curso/actions/oci-bastion-deploy@main
         with:
           instance-id: ${{ vars.OCI_INSTANCE_OCID }}
-          # rollback.sh reconstruye desde el checkout git ya existente en la VM,
-          # no necesita un jar nuevo — se reusa el artefacto ya subido por Build
-          # solo porque artifact-name/target-path son inputs obligatorios de esta accion.
+          # rollback.sh rebuilds from the git checkout that already exists on the VM,
+          # it doesn't need a new jar -- the artifact already uploaded by Build is
+          # only reused here because artifact-name/target-path are required inputs
+          # of this action.
           artifact-name: linker-app
           target-path: /tmp/deploy/linker/rollback-${{ github.sha }}
           target-os-username: ubuntu
@@ -183,7 +184,7 @@ jobs:
         run: |
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://1.n-la-c.app/" || echo "000")
           if [ "$STATUS" != "200" ]; then
-            echo "El servicio no respondio correctamente tras el rollback (status: $STATUS)."
+            echo "The service did not respond correctly after the rollback (status: $STATUS)."
             exit 1
           fi
-          echo "Rollback verificado: el servicio responde 200 en ${{ steps.previous.outputs.tag }}."
+          echo "Rollback verified: the service responds 200 on ${{ steps.previous.outputs.tag }}."

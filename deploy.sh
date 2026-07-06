@@ -14,35 +14,35 @@ else
 fi
 
 if [ -z "$REPO_URL" ]; then
-  echo "Uso: bash deploy.sh <REPO_URL>"
+  echo "Usage: bash deploy.sh <REPO_URL>"
   exit 1
 fi
 
 echo "=== LINKER DEPLOY ==="
 
-# 1. Actualizar sistema
+# 1. Update system
 echo "✓ Updating system..."
 sudo apt update -y
 sudo apt upgrade -y
 
-# 2. Instalar dependencias
+# 2. Install dependencies
 echo "✓ Installing dependencies..."
 sudo apt install -y git maven openjdk-21-jdk nginx
 
-# 3. Crear directorios
+# 3. Create directories
 echo "✓ Creating directories..."
 sudo mkdir -p "$APP_DIR"
 sudo mkdir -p "$DB_DIR"
 sudo mkdir -p "$WEB_DIR"
 
-# 4. Preparar fuente
+# 4. Prepare source
 if [ "$REPO_DIR" = "$WORKDIR" ]; then
   echo "✓ Using current repository directory..."
   if [ -d "$REPO_DIR/.git" ]; then
     if git -C "$REPO_DIR" symbolic-ref -q HEAD > /dev/null; then
       git -C "$REPO_DIR" pull --ff-only
     else
-      echo "✓ HEAD desacoplado (ej. tras un rollback a un tag); no se hace pull."
+      echo "✓ Detached HEAD (e.g. after a rollback to a tag); skipping pull."
     fi
   fi
 else
@@ -54,7 +54,7 @@ else
     if git -C "$REPO_DIR" symbolic-ref -q HEAD > /dev/null; then
       git -C "$REPO_DIR" pull --ff-only
     else
-      echo "✓ HEAD desacoplado (ej. tras un rollback a un tag); no se hace pull."
+      echo "✓ Detached HEAD (e.g. after a rollback to a tag); skipping pull."
     fi
   fi
 fi
@@ -85,10 +85,10 @@ sudo chown -R www-data:www-data "$WEB_DIR"
 
 # 7. Systemd service
 echo "✓ Creating systemd service..."
-# LD_SDK_KEY no llega por secrets aqui (este script corre directo en la VM);
-# si no se pasa explicitamente como variable de entorno, se preserva el valor
-# que ya estuviera configurado en el unit existente para no dejar el servicio
-# sin la key en un rollback o redeploy manual.
+# LD_SDK_KEY doesn't arrive via secrets here (this script runs directly on
+# the VM); if it isn't passed explicitly as an env var, preserve whatever
+# value was already configured in the existing unit so a manual rollback
+# or redeploy doesn't leave the service without the key.
 EXISTING_LD_SDK_KEY=$(sudo grep -oP '(?<=Environment="LD_SDK_KEY=)[^"]*' /etc/systemd/system/linker1.service 2>/dev/null || true)
 LD_SDK_KEY="${LD_SDK_KEY:-$EXISTING_LD_SDK_KEY}"
 
