@@ -103,6 +103,10 @@ El pipeline de CI (`.github/workflows/ci.yml`) corre en cada `push` a `main` y e
 
 `main` está protegida: requiere al menos una aprobación y que los checks Build/Tests/Package/Summary/Smoke Test pasen antes de poder hacer merge.
 
+### Despliegue continuo
+
+Cada `push` a `main` dispara además `.github/workflows/pipeline.yml`, que compila el jar, lo despliega a la VM de producción a través de un OCI Bastion (la VM no tiene IP pública), valida que el servicio responda, y hace rollback automático al tag estable anterior si algo falla. El detalle completo (jobs, secrets requeridos, mecanismo de bastión) está en [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md); la estrategia de rollback en [`docs/ROLLBACK_STRATEGY.md`](docs/ROLLBACK_STRATEGY.md).
+
 ## Releases (GitHub Release)
 
 El proyecto incluye un workflow de release en `.github/workflows/release.yml` que crea una **GitHub Release** automáticamente y adjunta artefactos listos para descargar.
