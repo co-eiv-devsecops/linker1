@@ -81,4 +81,17 @@ class LinkRepositoryTest {
         conn.close();
         assertThrows(SQLException.class, () -> repo.findIdByUrl("url"));
     }
+
+    @Test
+    void countLinksReturnsZeroWhenTableEmpty() throws SQLException {
+        assertEquals(0, repo.countLinks());
+    }
+
+    @Test
+    void countLinksReturnsNumberOfStoredRows() throws SQLException {
+        repo.insertShortUrl("https://example.com");
+        repo.insertShortUrl("https://other.example.com");
+
+        assertEquals(2, repo.countLinks());
+    }
 }
