@@ -1,3 +1,7 @@
+[![CI](https://github.com/co-eiv-devsecops/linker1/actions/workflows/ci.yml/badge.svg?branch=DEV)](https://github.com/co-eiv-devsecops/linker1/actions/workflows/ci.yml)
+[![Deployment Pipeline](https://github.com/co-eiv-devsecops/linker1/actions/workflows/pipeline.yml/badge.svg?branch=main)](https://github.com/co-eiv-devsecops/linker1/actions/workflows/pipeline.yml)
+[![Release](https://github.com/co-eiv-devsecops/linker1/actions/workflows/release.yml/badge.svg)](https://github.com/co-eiv-devsecops/linker1/actions/workflows/release.yml)
+
 # Linker1
 
 A simple URL shortener built with **Java** and **Javalin**, with a SQLite database and a static frontend.
