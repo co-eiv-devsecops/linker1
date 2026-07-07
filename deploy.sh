@@ -95,8 +95,23 @@ LD_SDK_KEY="${LD_SDK_KEY:-$EXISTING_LD_SDK_KEY}"
 EXISTING_OTEL_ENDPOINT=$(sudo grep -oP '(?<=Environment="OTEL_EXPORTER_OTLP_ENDPOINT=)[^"]*' /etc/systemd/system/linker1.service 2>/dev/null || true)
 OTEL_EXPORTER_OTLP_ENDPOINT="${OTEL_EXPORTER_OTLP_ENDPOINT:-$EXISTING_OTEL_ENDPOINT}"
 
+EXISTING_OTEL_HEADERS=$(sudo grep -oP '(?<=Environment="OTEL_EXPORTER_OTLP_HEADERS=)[^"]*' /etc/systemd/system/linker1.service 2>/dev/null || true)
+OTEL_EXPORTER_OTLP_HEADERS="${OTEL_EXPORTER_OTLP_HEADERS:-$EXISTING_OTEL_HEADERS}"
+
 EXISTING_LOG_LEVEL=$(sudo grep -oP '(?<=Environment="LOG_LEVEL=)[^"]*' /etc/systemd/system/linker1.service 2>/dev/null || true)
 LOG_LEVEL="${LOG_LEVEL:-${EXISTING_LOG_LEVEL:-INFO}}"
+
+EXISTING_MYSQL_HOST=$(sudo grep -oP '(?<=Environment="MYSQL_HOST=)[^"]*' /etc/systemd/system/linker1.service 2>/dev/null || true)
+MYSQL_HOST="${MYSQL_HOST:-$EXISTING_MYSQL_HOST}"
+
+EXISTING_MYSQL_DATABASE=$(sudo grep -oP '(?<=Environment="MYSQL_DATABASE=)[^"]*' /etc/systemd/system/linker1.service 2>/dev/null || true)
+MYSQL_DATABASE="${MYSQL_DATABASE:-$EXISTING_MYSQL_DATABASE}"
+
+EXISTING_MYSQL_USER=$(sudo grep -oP '(?<=Environment="MYSQL_USER=)[^"]*' /etc/systemd/system/linker1.service 2>/dev/null || true)
+MYSQL_USER="${MYSQL_USER:-$EXISTING_MYSQL_USER}"
+
+EXISTING_MYSQL_PWD=$(sudo grep -oP '(?<=Environment="MYSQL_PWD=)[^"]*' /etc/systemd/system/linker1.service 2>/dev/null || true)
+MYSQL_PWD="${MYSQL_PWD:-$EXISTING_MYSQL_PWD}"
 
 sudo tee /etc/systemd/system/linker1.service > /dev/null <<EOF
 [Unit]
@@ -123,6 +138,28 @@ EOF
 # to the SDK's own default/no-op behavior) rather than set to "".
 if [ -n "$OTEL_EXPORTER_OTLP_ENDPOINT" ]; then
   echo "Environment=\"OTEL_EXPORTER_OTLP_ENDPOINT=$OTEL_EXPORTER_OTLP_ENDPOINT\"" | sudo tee -a /etc/systemd/system/linker1.service > /dev/null
+fi
+
+if [ -n "$OTEL_EXPORTER_OTLP_HEADERS" ]; then
+  echo "Environment=\"OTEL_EXPORTER_OTLP_HEADERS=$OTEL_EXPORTER_OTLP_HEADERS\"" | sudo tee -a /etc/systemd/system/linker1.service > /dev/null
+fi
+
+# MySQL vars are optional too: unlike the OTLP endpoint, an empty/missing
+# value doesn't crash the app (Main.java defaults MYSQL_HOST to "localhost"
+# and the others to ""), it just makes /healthz report unhealthy -- but the
+# lines are still omitted when empty so an accidental empty redeploy can't
+# silently blank out a previously-working MySQL config.
+if [ -n "$MYSQL_HOST" ]; then
+  echo "Environment=\"MYSQL_HOST=$MYSQL_HOST\"" | sudo tee -a /etc/systemd/system/linker1.service > /dev/null
+fi
+if [ -n "$MYSQL_DATABASE" ]; then
+  echo "Environment=\"MYSQL_DATABASE=$MYSQL_DATABASE\"" | sudo tee -a /etc/systemd/system/linker1.service > /dev/null
+fi
+if [ -n "$MYSQL_USER" ]; then
+  echo "Environment=\"MYSQL_USER=$MYSQL_USER\"" | sudo tee -a /etc/systemd/system/linker1.service > /dev/null
+fi
+if [ -n "$MYSQL_PWD" ]; then
+  echo "Environment=\"MYSQL_PWD=$MYSQL_PWD\"" | sudo tee -a /etc/systemd/system/linker1.service > /dev/null
 fi
 
 sudo tee -a /etc/systemd/system/linker1.service > /dev/null <<EOF
