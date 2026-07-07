@@ -85,12 +85,18 @@ sudo chown -R www-data:www-data "$WEB_DIR"
 
 # 7. Systemd service
 echo "✓ Creating systemd service..."
-# LD_SDK_KEY doesn't arrive via secrets here (this script runs directly on
-# the VM); if it isn't passed explicitly as an env var, preserve whatever
-# value was already configured in the existing unit so a manual rollback
-# or redeploy doesn't leave the service without the key.
+# These don't arrive via secrets here (this script runs directly on the VM);
+# if any isn't passed explicitly as an env var, preserve whatever value was
+# already configured in the existing unit so a manual rollback or redeploy
+# doesn't silently reset it (e.g. back to no OTLP endpoint or default LOG_LEVEL).
 EXISTING_LD_SDK_KEY=$(sudo grep -oP '(?<=Environment="LD_SDK_KEY=)[^"]*' /etc/systemd/system/linker1.service 2>/dev/null || true)
 LD_SDK_KEY="${LD_SDK_KEY:-$EXISTING_LD_SDK_KEY}"
+
+EXISTING_OTEL_ENDPOINT=$(sudo grep -oP '(?<=Environment="OTEL_EXPORTER_OTLP_ENDPOINT=)[^"]*' /etc/systemd/system/linker1.service 2>/dev/null || true)
+OTEL_EXPORTER_OTLP_ENDPOINT="${OTEL_EXPORTER_OTLP_ENDPOINT:-$EXISTING_OTEL_ENDPOINT}"
+
+EXISTING_LOG_LEVEL=$(sudo grep -oP '(?<=Environment="LOG_LEVEL=)[^"]*' /etc/systemd/system/linker1.service 2>/dev/null || true)
+LOG_LEVEL="${LOG_LEVEL:-${EXISTING_LOG_LEVEL:-INFO}}"
 
 sudo tee /etc/systemd/system/linker1.service > /dev/null <<EOF
 [Unit]
@@ -107,6 +113,19 @@ User=ubuntu
 Environment="LINKER_PORT=8080"
 Environment="LINKER_DB_PATH=$DB_DIR/linker1.db"
 Environment="LD_SDK_KEY=$LD_SDK_KEY"
+Environment="OTEL_SERVICE_NAME=linker1"
+Environment="LOG_LEVEL=$LOG_LEVEL"
+EOF
+
+# OTEL_EXPORTER_OTLP_ENDPOINT is only written when it has a real value: the
+# OTel SDK throws a hard ConfigurationException and refuses to start if this
+# variable is present but empty, so it must be entirely absent (falling back
+# to the SDK's own default/no-op behavior) rather than set to "".
+if [ -n "$OTEL_EXPORTER_OTLP_ENDPOINT" ]; then
+  echo "Environment=\"OTEL_EXPORTER_OTLP_ENDPOINT=$OTEL_EXPORTER_OTLP_ENDPOINT\"" | sudo tee -a /etc/systemd/system/linker1.service > /dev/null
+fi
+
+sudo tee -a /etc/systemd/system/linker1.service > /dev/null <<EOF
 
 [Install]
 WantedBy=multi-user.target

@@ -175,6 +175,14 @@ The `postman/linker1.postman_collection.json` collection covers: static routes, 
 npx newman run postman/linker1.postman_collection.json --env-var "baseUrl=http://localhost:8080"
 ```
 
+## Observability
+
+Linker1 is instrumented with the [OpenTelemetry Java SDK](https://opentelemetry.io/docs/languages/java/): logs (via SLF4J/Logback, bridged into OpenTelemetry), metrics (2 counters, 2 gauges, 2 histograms covering the RED method plus system-level gauges), and traces (2 traces, each with a parent and a child span) around link creation and resolution. All of it is manual/programmatic instrumentation — explicit calls in `src/`, not the auto-instrumentation javaagent — built around a small reusable library (`linker.telemetry`) so the rest of the codebase touches it through a handful of narrow, constructor-injected classes instead of the raw OpenTelemetry API.
+
+- **Verbosity**: controlled by the `LOG_LEVEL` environment variable, read at process startup — the same deployable jar can run at any verbosity without a rebuild. See [`docs/LOGGING.md`](docs/LOGGING.md).
+- **Metrics, traces, and the instrumentation library's design**: see [`docs/INSTRUMENTATION.md`](docs/INSTRUMENTATION.md).
+- **Exporting to a backend (e.g. Grafana Cloud)**: set `OTEL_EXPORTER_OTLP_ENDPOINT` (and `OTEL_EXPORTER_OTLP_HEADERS` for auth) — standard OpenTelemetry environment variables, no custom config mechanism. Left unset, the app runs normally with OTLP export simply failing silently in the background rather than refusing to start.
+
 ## Running with a Dev Container (Visual Studio Code)
 
 As an alternative to a local install, the project can be run using a **Dev Container**. This option provides a reproducible development environment and avoids manually installing the project's dependencies on your machine.
@@ -264,11 +272,13 @@ linker1/
 │   ├── PULL_REQUEST_TEMPLATE.md
 │   ├── ISSUE_TEMPLATE/            # Bug report / feature request templates
 │   └── CODEOWNERS
-├── docs/                          # Deployment, rollback, and branch protection docs
+├── docs/                          # Deployment, rollback, branch protection, and observability docs
 │   ├── DEPLOYMENT.md
 │   ├── ROLLBACK_STRATEGY.md
 │   ├── BRANCH_PROTECTION.md
-│   └── FEATURE_FLAGS.md
+│   ├── FEATURE_FLAGS.md
+│   ├── LOGGING.md                 # LOG_LEVEL configuration
+│   └── INSTRUMENTATION.md         # OpenTelemetry metrics/traces/logs design
 ├── infra/                        # Infrastructure as code (Terraform)
 │   ├── main.tf
 │   ├── variables.tf
@@ -276,8 +286,10 @@ linker1/
 │   ├── outputs.tf
 │   ├── cloud-init.yaml
 │   └── terraform.tfvars.example
+├── resources/
+│   └── logback.xml                # Logging config: console + OTel appenders, LOG_LEVEL-driven verbosity
 ├── src/
-│   ├── Main.java                  # Bootstrap: DB connection, LaunchDarkly client, Javalin server, route registration
+│   ├── Main.java                  # Bootstrap: DB, telemetry SDK, LaunchDarkly client, Javalin server, route registration
 │   └── linker/                    # Business logic and data access
 │       ├── Link.java
 │       ├── LinkService.java       # Validation, id generation, alias
@@ -285,6 +297,11 @@ linker1/
 │       ├── AliasConflictException.java
 │       ├── config/
 │       │   └── FeatureFlags.java  # LaunchDarkly wrapper, injected via constructor
+│       ├── telemetry/             # OpenTelemetry wrappers, injected via constructor
+│       │   ├── Telemetry.java     # Builds the OpenTelemetry SDK from OTEL_* env vars
+│       │   ├── RequestMetrics.java  # RED-method HTTP counters/histogram
+│       │   ├── LinkSpans.java     # Traces for link create/resolve + DB duration histogram
+│       │   └── SystemMetrics.java  # Link-count and JVM heap gauges
 │       └── routes/                # HTTP handlers (Javalin), constructor-injected dependencies
 │           ├── LinkRoutes.java
 │           └── StaticRoutes.java
@@ -300,7 +317,7 @@ linker1/
 ├── scripts/
 │   ├── linker1                    # Executable launcher script (packaged alongside the jar)
 │   └── rollback.sh                # Rolls the VM back to a previous stable tag
-├── pom.xml                        # Maven configuration (JaCoCo, GitHub Packages, LaunchDarkly SDK)
+├── pom.xml                        # Maven configuration (JaCoCo, GitHub Packages, LaunchDarkly SDK, OpenTelemetry)
 ├── deploy.sh                      # Deployment script (OCI)
 └── README.md                      # This file
 ```

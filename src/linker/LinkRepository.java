@@ -46,4 +46,12 @@ public class LinkRepository {
             ps.executeUpdate();
         }
     }
+
+    public long countLinks() throws SQLException {
+        try (var stmt = conn.createStatement();
+             var rs = stmt.executeQuery("SELECT COUNT(*) AS total FROM shorturl")) {
+            rs.next();
+            return rs.getLong("total");
+        }
+    }
 }
