@@ -4,8 +4,9 @@ data "oci_core_subnet" "linker1_subnet" {
 
 locals {
   cloud_init_rendered = templatefile("${path.module}/cloud-init.yaml", {
-    repo_url   = var.repo_url
-    ld_sdk_key = var.ld_sdk_key
+    repo_url                    = var.repo_url
+    ld_sdk_key                  = var.ld_sdk_key
+    otel_exporter_otlp_endpoint = var.otel_exporter_otlp_endpoint
   })
 }
 

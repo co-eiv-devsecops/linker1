@@ -1,8 +1,13 @@
 package linker.routes;
 
 import io.javalin.Javalin;
+import io.opentelemetry.sdk.OpenTelemetrySdk;
+import io.opentelemetry.sdk.metrics.SdkMeterProvider;
+import io.opentelemetry.sdk.trace.SdkTracerProvider;
 import linker.LinkRepository;
 import linker.LinkService;
+import linker.telemetry.LinkSpans;
+import linker.telemetry.RequestMetrics;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -39,8 +44,14 @@ class LinkRoutesTest {
 
         var repo = new LinkRepository(conn);
         var service = new LinkService(repo);
+        var testOtel = OpenTelemetrySdk.builder()
+                .setTracerProvider(SdkTracerProvider.builder().build())
+                .setMeterProvider(SdkMeterProvider.builder().build())
+                .build();
+        var requestMetrics = new RequestMetrics(testOtel.getMeter("test"));
+        var linkSpans = new LinkSpans(testOtel.getTracer("test"), testOtel.getMeter("test"));
         app = Javalin.create().start(0);
-        new LinkRoutes(service).register(app);
+        new LinkRoutes(service, requestMetrics, linkSpans).register(app);
         port = app.port();
     }
 
