@@ -30,6 +30,12 @@ variable "ld_sdk_key" {
   sensitive   = true
 }
 
+variable "otel_exporter_otlp_endpoint" {
+  description = "OTLP endpoint (e.g. Grafana Cloud) for exporting logs/metrics/traces. Left empty, the app runs with OTLP export disabled instead of failing to start."
+  type        = string
+  default     = ""
+}
+
 variable "instance_shape" {
   type    = string
   default = "VM.Standard.E5.Flex"

@@ -37,6 +37,11 @@ runcmd:
     Environment="LINKER_PORT=8080"
     Environment="LINKER_DB_PATH=/var/lib/linker1/linker1.db"
     Environment="LD_SDK_KEY=${ld_sdk_key}"
+    Environment="OTEL_SERVICE_NAME=linker1"
+    Environment="LOG_LEVEL=INFO"
+    %{ if otel_exporter_otlp_endpoint != "" }
+    Environment="OTEL_EXPORTER_OTLP_ENDPOINT=${otel_exporter_otlp_endpoint}"
+    %{ endif }
 
     [Install]
     WantedBy=multi-user.target
