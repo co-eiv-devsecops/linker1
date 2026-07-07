@@ -1,5 +1,7 @@
 # Linker1
 
+[![CI](https://github.com/co-eiv-devsecops/linker1/actions/workflows/ci.yml/badge.svg?branch=DEV)](https://github.com/co-eiv-devsecops/linker1/actions/workflows/ci.yml)
+
 A simple URL shortener built with **Java** and **Javalin**, with a SQLite database and a static frontend.
 
 ## What is it?
