@@ -20,7 +20,7 @@ function setResult(shortUrl) {
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
   result.classList.add('hidden');
-  setMessage('Creando enlace...');
+  setMessage('Creating link...');
 
   try {
     const alias = aliasInput.value.trim();
@@ -40,14 +40,14 @@ form.addEventListener('submit', async (event) => {
     const text = await response.text();
 
     if (!response.ok) {
-      throw new Error(text || 'No se pudo acortar la URL.');
+      throw new Error(text || 'Could not shorten the URL.');
     }
 
     const shortPath = response.headers.get('Location') || `/${text}`;
     const shortUrl = new URL(shortPath, window.location.origin).toString();
 
     setResult(shortUrl);
-    setMessage('Enlace listo.');
+    setMessage('Link ready.');
   } catch (error) {
     setMessage(error.message, true);
   }
@@ -61,8 +61,8 @@ copyButton.addEventListener('click', async () => {
 
   try {
     await navigator.clipboard.writeText(value);
-    setMessage('Enlace copiado al portapapeles.');
+    setMessage('Link copied to clipboard.');
   } catch (error) {
-    setMessage('No se pudo copiar el enlace.', true);
+    setMessage('Could not copy the link.', true);
   }
 });
