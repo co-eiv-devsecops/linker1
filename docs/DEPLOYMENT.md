@@ -49,6 +49,22 @@ Note: `DEPLOYMENT_PUBLIC_KEY` is a **secret**, not a variable, even though the i
 
 There is also an `OCI_VM_SSHKEY_CONTENT` secret in the repo that isn't used by this pipeline or the instructor's template — it was left untouched, unused until it's identified what it was for.
 
+### Optional: OTLP export and MySQL healthcheck
+
+`deploy-prod` also sets these, but **not yet configured in the repo** (verified via `gh secret list` / `gh variable list` / `gh secret list --env prod` / `gh variable list --env prod` — none exist as of this writing). Until they're added, `add_env_if_set` in the job's script simply omits each corresponding `Environment=` line, so the app starts fine with OTLP export disabled and `/healthz` reporting `503` (see [`HEALTHCHECK.md`](HEALTHCHECK.md)):
+
+| Name | Type | Level | Use |
+| --- | --- | --- | --- |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | variable | repo or `prod` env | Grafana Cloud OTLP gateway URL — see [`INSTRUMENTATION.md`](INSTRUMENTATION.md#otlp-export-configuration) |
+| `OTEL_EXPORTER_OTLP_HEADERS` | secret | repo or `prod` env | `Authorization=Basic <token>` for the OTLP gateway; token comes from the OCI Vault at `https://cloud.oracle.com/security/secrets?region=sa-bogota-1` |
+| `MYSQL_HOST` | variable | repo or `prod` env | MySQL host for `/healthz`'s `SELECT 1` check |
+| `MYSQL_DATABASE` | variable | repo or `prod` env | MySQL database name (`linker_db_<group-number>`) |
+| `MYSQL_USER` | variable | repo or `prod` env | MySQL user (`linker_user_<group-number>`) |
+| `MYSQL_PWD` | secret | repo or `prod` env | MySQL password; also comes from the OCI Vault above |
+| `LOG_LEVEL` | variable | repo or `prod` env | Defaults to `INFO` in the pipeline if unset |
+
+These need to be added with `gh secret set <NAME>` / `gh variable set <NAME>` (or via Settings > Secrets and variables > Actions) — since they're pulled from OCI Vault and the course's Grafana Cloud stack, only someone with access to those consoles can supply the real values.
+
 ## Open risks / things to verify
 
 - The remote `script:` assumes the `ubuntu` user has passwordless `sudo` on the VM (same assumption `deploy.sh` already makes). This is consistent with what the action itself needs for its artifact-copy step (`sudo tar -C $target_q -xf -`), so if the bastion didn't grant that access, the action's own "Copy artifact to target path" step would already fail before reaching our script.

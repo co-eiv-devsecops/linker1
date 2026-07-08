@@ -87,6 +87,8 @@ Two synchronous gauges (`LongGauge`, via `meter.gaugeBuilder(name).ofLongs().bui
 - **`link.create`** (parent) → **`link.create.persist`** (child): wraps `POST /link`, both the plain-URL and aliased-URL paths.
 - **`link.resolve`** (parent) → **`link.resolve.lookup`** (child): wraps `GET /{id}`.
 
+`GET /healthz` produces its own, single-span trace (`mysql.healthcheck`, `SpanKind.SERVER`) — see [`HEALTHCHECK.md`](HEALTHCHECK.md), kept separate from this document since it belongs to the `linker.health` package, not `linker.telemetry`.
+
 ### Logs (2+ entries per level — minimum met)
 
 See [`docs/LOGGING.md`](LOGGING.md) for the full table of log levels and where each is used.

@@ -5,3 +5,11 @@ image_id       = "ocid1.image.oc1.sa-bogota-1.xxxxxxxx"
 repo_url       = "https://github.com/co-eiv-devsecops/linker1"
 ssh_public_key = "ssh-rsa AAAA..."
 ld_sdk_key     = "sdk-xxxxxxxxxxxxxxxx"
+
+# Optional -- all default to "" (disabled) if omitted.
+# otel_exporter_otlp_endpoint = "https://otlp-gateway-prod-us-east-3.grafana.net/otlp"
+# otel_exporter_otlp_headers  = "Authorization=Basic <base64-encoded-instance-id:api-token>"
+# mysql_host                  = "10.0.65.126"
+# mysql_database              = "linker_db_X"
+# mysql_user                  = "linker_user_X"
+# mysql_pwd                   = "xxxxxxxxxxxxxxxx"

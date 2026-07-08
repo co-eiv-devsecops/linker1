@@ -42,6 +42,21 @@ runcmd:
     %{ if otel_exporter_otlp_endpoint != "" }
     Environment="OTEL_EXPORTER_OTLP_ENDPOINT=${otel_exporter_otlp_endpoint}"
     %{ endif }
+    %{ if otel_exporter_otlp_headers != "" }
+    Environment="OTEL_EXPORTER_OTLP_HEADERS=${otel_exporter_otlp_headers}"
+    %{ endif }
+    %{ if mysql_host != "" }
+    Environment="MYSQL_HOST=${mysql_host}"
+    %{ endif }
+    %{ if mysql_database != "" }
+    Environment="MYSQL_DATABASE=${mysql_database}"
+    %{ endif }
+    %{ if mysql_user != "" }
+    Environment="MYSQL_USER=${mysql_user}"
+    %{ endif }
+    %{ if mysql_pwd != "" }
+    Environment="MYSQL_PWD=${mysql_pwd}"
+    %{ endif }
 
     [Install]
     WantedBy=multi-user.target

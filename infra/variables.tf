@@ -25,7 +25,7 @@ variable "repo_url" {
 }
 
 variable "ld_sdk_key" {
-  description = "LaunchDarkly SDK key inyectada en el systemd unit del servicio linker1"
+  description = "LaunchDarkly SDK key injected into the linker1 systemd service unit"
   type        = string
   sensitive   = true
 }
@@ -33,6 +33,37 @@ variable "ld_sdk_key" {
 variable "otel_exporter_otlp_endpoint" {
   description = "OTLP endpoint (e.g. Grafana Cloud) for exporting logs/metrics/traces. Left empty, the app runs with OTLP export disabled instead of failing to start."
   type        = string
+  default     = ""
+}
+variable "otel_exporter_otlp_headers" {
+  description = "OTLP exporter auth headers (e.g. \"Authorization=Basic <token>\" for Grafana Cloud). Left empty, no auth headers are sent."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "mysql_host" {
+  description = "MySQL host used by GET /healthz's SELECT 1 check. Left empty, the healthcheck reports unhealthy instead of the app failing to start."
+  type        = string
+  default     = ""
+}
+
+variable "mysql_database" {
+  description = "MySQL database name for the healthcheck connection."
+  type        = string
+  default     = ""
+}
+
+variable "mysql_user" {
+  description = "MySQL user for the healthcheck connection."
+  type        = string
+  default     = ""
+}
+
+variable "mysql_pwd" {
+  description = "MySQL password for the healthcheck connection."
+  type        = string
+  sensitive   = true
   default     = ""
 }
 
