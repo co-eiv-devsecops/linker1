@@ -7,6 +7,11 @@ locals {
     repo_url                    = var.repo_url
     ld_sdk_key                  = var.ld_sdk_key
     otel_exporter_otlp_endpoint = var.otel_exporter_otlp_endpoint
+    otel_exporter_otlp_headers  = var.otel_exporter_otlp_headers
+    mysql_host                  = var.mysql_host
+    mysql_database              = var.mysql_database
+    mysql_user                  = var.mysql_user
+    mysql_pwd                   = var.mysql_pwd
   })
 }
 

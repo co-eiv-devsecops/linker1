@@ -87,6 +87,28 @@ jobs:
             Environment="LINKER_PORT=8080"
             Environment="LINKER_DB_PATH=/var/lib/linker1/linker1.db"
             Environment="LD_SDK_KEY=${{ secrets.LD_SDK_KEY }}"
+            Environment="OTEL_SERVICE_NAME=linker1"
+            Environment="LOG_LEVEL=${{ vars.LOG_LEVEL != '' && vars.LOG_LEVEL || 'INFO' }}"
+            EOF
+
+            # These are optional -- appended only when a real value is configured, since
+            # the OTel SDK refuses to start if OTEL_EXPORTER_OTLP_ENDPOINT is present but
+            # empty, and an empty MySQL var would otherwise silently overwrite a working
+            # value with a blank one on every deploy.
+            add_env_if_set() {
+              local name="$1" value="$2"
+              if [ -n "$value" ]; then
+                echo "Environment=\"$name=$value\"" | sudo tee -a /etc/systemd/system/linker1.service > /dev/null
+              fi
+            }
+            add_env_if_set OTEL_EXPORTER_OTLP_ENDPOINT "${{ vars.OTEL_EXPORTER_OTLP_ENDPOINT }}"
+            add_env_if_set OTEL_EXPORTER_OTLP_HEADERS "${{ secrets.OTEL_EXPORTER_OTLP_HEADERS }}"
+            add_env_if_set MYSQL_HOST "${{ vars.MYSQL_HOST }}"
+            add_env_if_set MYSQL_DATABASE "${{ vars.MYSQL_DATABASE }}"
+            add_env_if_set MYSQL_USER "${{ vars.MYSQL_USER }}"
+            add_env_if_set MYSQL_PWD "${{ secrets.MYSQL_PWD }}"
+
+            sudo tee -a /etc/systemd/system/linker1.service > /dev/null <<EOF
 
             [Install]
             WantedBy=multi-user.target
@@ -101,6 +123,9 @@ jobs:
 
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/)
             test "$STATUS" = "200"
+
+            HEALTHZ_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/healthz)
+            echo "Healthcheck status: $HEALTHZ_STATUS (non-blocking -- MySQL may not be configured for this environment yet)"
 
   validate-prod:
     name: Validate Production
