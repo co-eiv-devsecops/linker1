@@ -93,6 +93,25 @@ jobs:
             MYSQL_PWD=$(printf '%s' "${{ steps.b64.outputs.mysql_pwd }}" | base64 -d)
             LOG_LEVEL=$(printf '%s' "${{ steps.b64.outputs.log_level }}" | base64 -d)
 
+            # systemd's unit-file parser treats a bare "%" in any directive as the start
+            # of a specifier (%h, %n, etc.) and a bare '"' inside a quoted assignment as
+            # the end of the value -- both are real characters a Grafana Cloud token or
+            # password can legitimately contain. Escaping "%" -> "%%" and '"' -> '\"'
+            # here is what actually crashed the previous two deploys: a literal "%" in
+            # OTEL_EXPORTER_OTLP_HEADERS made systemd reject the unit, so the service
+            # never came back up even though this script itself ran to completion.
+            systemd_escape_value() {
+              printf '%s' "$1" | sed -e 's/%/%%/g' -e 's/"/\\"/g'
+            }
+            LD_SDK_KEY=$(systemd_escape_value "$LD_SDK_KEY")
+            OTEL_EXPORTER_OTLP_ENDPOINT=$(systemd_escape_value "$OTEL_EXPORTER_OTLP_ENDPOINT")
+            OTEL_EXPORTER_OTLP_HEADERS=$(systemd_escape_value "$OTEL_EXPORTER_OTLP_HEADERS")
+            MYSQL_HOST=$(systemd_escape_value "$MYSQL_HOST")
+            MYSQL_DATABASE=$(systemd_escape_value "$MYSQL_DATABASE")
+            MYSQL_USER=$(systemd_escape_value "$MYSQL_USER")
+            MYSQL_PWD=$(systemd_escape_value "$MYSQL_PWD")
+            LOG_LEVEL=$(systemd_escape_value "$LOG_LEVEL")
+
             JAR_SRC=$(find "$DEPLOY_PATH" -maxdepth 1 -name '*.jar' | head -n 1)
 
             sudo mkdir -p /opt/linker1
