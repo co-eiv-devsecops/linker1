@@ -33,6 +33,17 @@ Each call:
 2. Opens a connection via the supplier and executes `SELECT 1`.
 3. Sets the span status to `OK` on success, or `ERROR` (with the exception recorded) if the connection or query fails — covering both "MySQL unreachable" and "query itself failed".
 
+### `HealthCheckMetrics`
+
+Every call to `HealthCheck.check()` also records to `HealthCheckMetrics`, following the same RED-method pattern as `linker.telemetry.RequestMetrics` (see [`INSTRUMENTATION.md`](INSTRUMENTATION.md)):
+
+| Name | Type | Unit | Meaning |
+| --- | --- | --- | --- |
+| `linker.healthcheck.checks` | Counter | `{check}` | Total number of health checks performed, tagged with `outcome` (`healthy`/`unhealthy`) |
+| `linker.healthcheck.failures` | Counter | `{check}` | Total number of health checks that failed |
+| `linker.healthcheck.duration` | Histogram | `ms` | Duration of the check (connection + `SELECT 1`), tagged with `outcome` |
+| `linker.healthcheck.up` | Gauge | `{status}` | `1` if the last check was healthy, `0` otherwise -- the single number to alert on |
+
 ### `HealthRoutes`
 
 Registers `GET /healthz`:
