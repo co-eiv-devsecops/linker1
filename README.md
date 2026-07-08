@@ -1,3 +1,7 @@
+[![CI](https://github.com/co-eiv-devsecops/linker1/actions/workflows/ci.yml/badge.svg?branch=DEV)](https://github.com/co-eiv-devsecops/linker1/actions/workflows/ci.yml)
+[![Deployment Pipeline](https://github.com/co-eiv-devsecops/linker1/actions/workflows/pipeline.yml/badge.svg?branch=main)](https://github.com/co-eiv-devsecops/linker1/actions/workflows/pipeline.yml)
+[![Release](https://github.com/co-eiv-devsecops/linker1/actions/workflows/release.yml/badge.svg)](https://github.com/co-eiv-devsecops/linker1/actions/workflows/release.yml)
+
 # Linker1
 
 A simple URL shortener built with **Java** and **Javalin**, with a SQLite database and a static frontend.
@@ -183,6 +187,11 @@ Linker1 is instrumented with the [OpenTelemetry Java SDK](https://opentelemetry.
 - **Metrics, traces, and the instrumentation library's design**: see [`docs/INSTRUMENTATION.md`](docs/INSTRUMENTATION.md).
 - **Exporting to a backend (e.g. Grafana Cloud)**: set `OTEL_EXPORTER_OTLP_ENDPOINT` (and `OTEL_EXPORTER_OTLP_HEADERS` for auth) — standard OpenTelemetry environment variables, no custom config mechanism. Left unset, the app runs normally with OTLP export simply failing silently in the background rather than refusing to start.
 
+### Health check
+
+`GET /healthz` runs `SELECT 1` against a MySQL connection (configured via `MYSQL_HOST`/`MYSQL_DATABASE`/`MYSQL_USER`/`MYSQL_PWD`) and returns `200 OK` or `503 Unhealthy: <detail>`, wrapped in its own `mysql.healthcheck` server-kind span. This is separate from Linker1's actual datastore (SQLite) — it exists purely so external monitors (e.g. Grafana Cloud Synthetic Monitoring) can poll a single endpoint to verify the deployed instance's MySQL dependency is reachable. See [`docs/HEALTHCHECK.md`](docs/HEALTHCHECK.md).
+
+
 ## Running with a Dev Container (Visual Studio Code)
 
 As an alternative to a local install, the project can be run using a **Dev Container**. This option provides a reproducible development environment and avoids manually installing the project's dependencies on your machine.
@@ -278,7 +287,8 @@ linker1/
 │   ├── BRANCH_PROTECTION.md
 │   ├── FEATURE_FLAGS.md
 │   ├── LOGGING.md                 # LOG_LEVEL configuration
-│   └── INSTRUMENTATION.md         # OpenTelemetry metrics/traces/logs design
+│   ├── INSTRUMENTATION.md         # OpenTelemetry metrics/traces/logs design
+│   └── HEALTHCHECK.md             # GET /healthz: MySQL SELECT 1, span, Grafana Synthetic Monitoring
 ├── infra/                        # Infrastructure as code (Terraform)
 │   ├── main.tf
 │   ├── variables.tf
@@ -302,6 +312,9 @@ linker1/
 │       │   ├── RequestMetrics.java  # RED-method HTTP counters/histogram
 │       │   ├── LinkSpans.java     # Traces for link create/resolve + DB duration histogram
 │       │   └── SystemMetrics.java  # Link-count and JVM heap gauges
+│       ├── health/                # MySQL healthcheck, injected via constructor
+│       │   ├── HealthCheck.java   # SELECT 1 against MySQL, wrapped in a SpanKind.SERVER span
+│       │   └── HealthRoutes.java  # GET /healthz -> 200/503
 │       └── routes/                # HTTP handlers (Javalin), constructor-injected dependencies
 │           ├── LinkRoutes.java
 │           └── StaticRoutes.java

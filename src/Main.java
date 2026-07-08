@@ -2,10 +2,13 @@ import io.javalin.Javalin;
 import java.sql.*;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 
 import linker.LinkRepository;
 import linker.LinkService;
 import linker.config.FeatureFlags;
+import linker.health.HealthCheck;
+import linker.health.HealthRoutes;
 import linker.routes.LinkRoutes;
 import linker.routes.StaticRoutes;
 import linker.telemetry.LinkSpans;
@@ -41,6 +44,26 @@ public class Main {
         var requestMetrics = new RequestMetrics(telemetry.meter());
         var linkSpans = new LinkSpans(telemetry.tracer(), telemetry.meter());
         var systemMetrics = new SystemMetrics(telemetry.meter());
+
+        // Registered explicitly: the fat jar's assembly step merges every
+        // dependency's META-INF/services/java.sql.Driver into one file with a
+        // "last one wins" strategy, which silently drops the MySQL driver's
+        // auto-registration in favor of SQLite's. Loading the class directly
+        // triggers its static registration block regardless of that merge.
+        Class.forName("com.mysql.cj.jdbc.Driver");
+        var mysqlHost = System.getenv().getOrDefault("MYSQL_HOST", "localhost");
+        var mysqlDatabase = System.getenv().getOrDefault("MYSQL_DATABASE", "");
+        var mysqlUser = System.getenv().getOrDefault("MYSQL_USER", "");
+        var mysqlPassword = System.getenv().getOrDefault("MYSQL_PWD", "");
+        var mysqlUrl = "jdbc:mysql://" + mysqlHost + "/" + mysqlDatabase;
+        Supplier<Connection> mysqlConnectionSupplier = () -> {
+            try {
+                return DriverManager.getConnection(mysqlUrl, mysqlUser, mysqlPassword);
+            } catch (SQLException e) {
+                throw new RuntimeException(e);
+            }
+        };
+        var healthCheck = new HealthCheck(telemetry.tracer(), mysqlConnectionSupplier);
 
         var telemetryScheduler = Executors.newSingleThreadScheduledExecutor();
         telemetryScheduler.scheduleAtFixedRate(() -> {
@@ -81,6 +104,9 @@ public class Main {
         // never accepts a connection while it would otherwise 404 with no routes.
         var app = Javalin.create();
         new StaticRoutes(featureFlags).register(app);
+        // Registered before LinkRoutes: GET /{id} would otherwise treat
+        // "healthz" as a link id and shadow this exact-match route.
+        new HealthRoutes(healthCheck).register(app);
         new LinkRoutes(service, requestMetrics, linkSpans).register(app);
         app.start(port);
         log.info("Server started on port={}", port);
