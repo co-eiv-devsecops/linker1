@@ -2,19 +2,13 @@ import io.javalin.Javalin;
 import java.sql.*;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-<<<<<<< HEAD
 import java.util.function.Supplier;
-=======
->>>>>>> 3217c524b03feaf1187cd4485ef575c1073bf5b7
 
 import linker.LinkRepository;
 import linker.LinkService;
 import linker.config.FeatureFlags;
-<<<<<<< HEAD
 import linker.health.HealthCheck;
 import linker.health.HealthRoutes;
-=======
->>>>>>> 3217c524b03feaf1187cd4485ef575c1073bf5b7
 import linker.routes.LinkRoutes;
 import linker.routes.StaticRoutes;
 import linker.telemetry.LinkSpans;
