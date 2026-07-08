@@ -89,29 +89,56 @@ echo "✓ Creating systemd service..."
 # if any isn't passed explicitly as an env var, preserve whatever value was
 # already configured in the existing unit so a manual rollback or redeploy
 # doesn't silently reset it (e.g. back to no OTLP endpoint or default LOG_LEVEL).
-EXISTING_LD_SDK_KEY=$(sudo grep -oP '(?<=Environment="LD_SDK_KEY=)[^"]*' /etc/systemd/system/linker1.service 2>/dev/null || true)
+#
+# Values already written into the unit are escaped (see systemd_escape_value
+# below), so anything read back out with grep is unescaped first -- otherwise
+# preserving an existing value across a redeploy would double the escaping
+# every time (%% -> %%%% -> ...).
+systemd_unescape_value() {
+  printf '%s' "$1" | sed -e 's/\\"/"/g' -e 's/%%/%/g'
+}
+EXISTING_LD_SDK_KEY=$(systemd_unescape_value "$(sudo grep -oP '(?<=Environment="LD_SDK_KEY=).*(?=")' /etc/systemd/system/linker1.service 2>/dev/null || true)")
 LD_SDK_KEY="${LD_SDK_KEY:-$EXISTING_LD_SDK_KEY}"
 
-EXISTING_OTEL_ENDPOINT=$(sudo grep -oP '(?<=Environment="OTEL_EXPORTER_OTLP_ENDPOINT=)[^"]*' /etc/systemd/system/linker1.service 2>/dev/null || true)
+EXISTING_OTEL_ENDPOINT=$(systemd_unescape_value "$(sudo grep -oP '(?<=Environment="OTEL_EXPORTER_OTLP_ENDPOINT=).*(?=")' /etc/systemd/system/linker1.service 2>/dev/null || true)")
 OTEL_EXPORTER_OTLP_ENDPOINT="${OTEL_EXPORTER_OTLP_ENDPOINT:-$EXISTING_OTEL_ENDPOINT}"
 
-EXISTING_OTEL_HEADERS=$(sudo grep -oP '(?<=Environment="OTEL_EXPORTER_OTLP_HEADERS=)[^"]*' /etc/systemd/system/linker1.service 2>/dev/null || true)
+EXISTING_OTEL_HEADERS=$(systemd_unescape_value "$(sudo grep -oP '(?<=Environment="OTEL_EXPORTER_OTLP_HEADERS=).*(?=")' /etc/systemd/system/linker1.service 2>/dev/null || true)")
 OTEL_EXPORTER_OTLP_HEADERS="${OTEL_EXPORTER_OTLP_HEADERS:-$EXISTING_OTEL_HEADERS}"
 
-EXISTING_LOG_LEVEL=$(sudo grep -oP '(?<=Environment="LOG_LEVEL=)[^"]*' /etc/systemd/system/linker1.service 2>/dev/null || true)
+EXISTING_LOG_LEVEL=$(systemd_unescape_value "$(sudo grep -oP '(?<=Environment="LOG_LEVEL=).*(?=")' /etc/systemd/system/linker1.service 2>/dev/null || true)")
 LOG_LEVEL="${LOG_LEVEL:-${EXISTING_LOG_LEVEL:-INFO}}"
 
-EXISTING_MYSQL_HOST=$(sudo grep -oP '(?<=Environment="MYSQL_HOST=)[^"]*' /etc/systemd/system/linker1.service 2>/dev/null || true)
+EXISTING_MYSQL_HOST=$(systemd_unescape_value "$(sudo grep -oP '(?<=Environment="MYSQL_HOST=).*(?=")' /etc/systemd/system/linker1.service 2>/dev/null || true)")
 MYSQL_HOST="${MYSQL_HOST:-$EXISTING_MYSQL_HOST}"
 
-EXISTING_MYSQL_DATABASE=$(sudo grep -oP '(?<=Environment="MYSQL_DATABASE=)[^"]*' /etc/systemd/system/linker1.service 2>/dev/null || true)
+EXISTING_MYSQL_DATABASE=$(systemd_unescape_value "$(sudo grep -oP '(?<=Environment="MYSQL_DATABASE=).*(?=")' /etc/systemd/system/linker1.service 2>/dev/null || true)")
 MYSQL_DATABASE="${MYSQL_DATABASE:-$EXISTING_MYSQL_DATABASE}"
 
-EXISTING_MYSQL_USER=$(sudo grep -oP '(?<=Environment="MYSQL_USER=)[^"]*' /etc/systemd/system/linker1.service 2>/dev/null || true)
+EXISTING_MYSQL_USER=$(systemd_unescape_value "$(sudo grep -oP '(?<=Environment="MYSQL_USER=).*(?=")' /etc/systemd/system/linker1.service 2>/dev/null || true)")
 MYSQL_USER="${MYSQL_USER:-$EXISTING_MYSQL_USER}"
 
-EXISTING_MYSQL_PWD=$(sudo grep -oP '(?<=Environment="MYSQL_PWD=)[^"]*' /etc/systemd/system/linker1.service 2>/dev/null || true)
+EXISTING_MYSQL_PWD=$(systemd_unescape_value "$(sudo grep -oP '(?<=Environment="MYSQL_PWD=).*(?=")' /etc/systemd/system/linker1.service 2>/dev/null || true)")
 MYSQL_PWD="${MYSQL_PWD:-$EXISTING_MYSQL_PWD}"
+
+# Escape *after* resolving the preserve-on-redeploy fallback above (which
+# already unescaped anything read back from the file), so every value below
+# is escaped exactly once no matter whether it came from a fresh env var or
+# from the existing unit. A literal "%" starts a systemd specifier (%h, %n,
+# ...) and a literal '"' would end the quoted assignment early -- both are
+# real characters a token/password can contain, and both previously crashed
+# the automated pipeline's equivalent of this step.
+systemd_escape_value() {
+  printf '%s' "$1" | sed -e 's/%/%%/g' -e 's/"/\\"/g'
+}
+LD_SDK_KEY=$(systemd_escape_value "$LD_SDK_KEY")
+OTEL_EXPORTER_OTLP_ENDPOINT=$(systemd_escape_value "$OTEL_EXPORTER_OTLP_ENDPOINT")
+OTEL_EXPORTER_OTLP_HEADERS=$(systemd_escape_value "$OTEL_EXPORTER_OTLP_HEADERS")
+LOG_LEVEL=$(systemd_escape_value "$LOG_LEVEL")
+MYSQL_HOST=$(systemd_escape_value "$MYSQL_HOST")
+MYSQL_DATABASE=$(systemd_escape_value "$MYSQL_DATABASE")
+MYSQL_USER=$(systemd_escape_value "$MYSQL_USER")
+MYSQL_PWD=$(systemd_escape_value "$MYSQL_PWD")
 
 sudo tee /etc/systemd/system/linker1.service > /dev/null <<EOF
 [Unit]
@@ -129,6 +156,7 @@ Environment="LINKER_PORT=8080"
 Environment="LINKER_DB_PATH=$DB_DIR/linker1.db"
 Environment="LD_SDK_KEY=$LD_SDK_KEY"
 Environment="OTEL_SERVICE_NAME=linker1"
+Environment="OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf"
 Environment="LOG_LEVEL=$LOG_LEVEL"
 EOF
 
@@ -161,7 +189,6 @@ fi
 if [ -n "$MYSQL_PWD" ]; then
   echo "Environment=\"MYSQL_PWD=$MYSQL_PWD\"" | sudo tee -a /etc/systemd/system/linker1.service > /dev/null
 fi
-
 sudo tee -a /etc/systemd/system/linker1.service > /dev/null <<EOF
 
 [Install]

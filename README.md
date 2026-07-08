@@ -121,7 +121,7 @@ The CI pipeline (`.github/workflows/ci.yml`) runs on every `push` to `main`/`DEV
 
 ### GitHub Packages
 
-Every push to `main`/`DEV` publishes the built jar as a Maven package to **GitHub Packages** (`https://maven.pkg.github.com/co-eiv-devsecops/linker1`), configured via `distributionManagement` in `pom.xml`. Each CI-published version gets a unique, collision-free identifier (`<base-version>-ci.<run-number>.<short-sha>`), so re-running CI never conflicts with a previously published package. This gives the team a versioned, downloadable artifact history independent of GitHub Releases.
+Every push to `main`/`DEV` publishes the built jar as a Maven package to **GitHub Packages** (`https://maven.pkg.github.com/co-eiv-devsecops/linker1`), configured via `distributionManagement` in `pom.xml`. Each CI-published version gets a unique, collision-free identifier (`<base-version>-ci.<run-number>.<run-attempt>.<short-sha>`), so re-running CI (including a manual re-run of the same job) never conflicts with a previously published package. This gives the team a versioned, downloadable artifact history independent of GitHub Releases.
 
 ### Continuous deployment
 
@@ -190,6 +190,7 @@ Linker1 is instrumented with the [OpenTelemetry Java SDK](https://opentelemetry.
 ### Health check
 
 `GET /healthz` runs `SELECT 1` against a MySQL connection (configured via `MYSQL_HOST`/`MYSQL_DATABASE`/`MYSQL_USER`/`MYSQL_PWD`) and returns `200 OK` or `503 Unhealthy: <detail>`, wrapped in its own `mysql.healthcheck` server-kind span. This is separate from Linker1's actual datastore (SQLite) — it exists purely so external monitors (e.g. Grafana Cloud Synthetic Monitoring) can poll a single endpoint to verify the deployed instance's MySQL dependency is reachable. See [`docs/HEALTHCHECK.md`](docs/HEALTHCHECK.md).
+
 
 ## Running with a Dev Container (Visual Studio Code)
 

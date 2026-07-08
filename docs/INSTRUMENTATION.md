@@ -71,7 +71,7 @@ Two synchronous gauges (`LongGauge`, via `meter.gaugeBuilder(name).ofLongs().bui
 
 ## What's instrumented, concretely
 
-### Metrics (2 counters, 2 gauges, 2 histograms — minimum met)
+### Metrics
 
 | Name | Type | Unit | Meaning |
 | --- | --- | --- | --- |
@@ -79,8 +79,13 @@ Two synchronous gauges (`LongGauge`, via `meter.gaugeBuilder(name).ofLongs().bui
 | `linker.http.errors` | Counter | `{request}` | Total requests that returned >=400 |
 | `linker.links.count` | Gauge | `{link}` | Current number of stored short links |
 | `linker.jvm.heap.used` | Gauge | `By` | JVM heap memory currently in use |
+| `linker.jvm.heap.max` | Gauge | `By` | Maximum JVM heap memory available |
+| `linker.jvm.threads` | Gauge | `{thread}` | Current number of live JVM threads |
+| `linker.process.uptime` | Gauge | `s` | Time elapsed since the process started |
 | `linker.http.request.duration` | Histogram | `ms` | HTTP request duration, tagged with `route` and `status_code` |
 | `linker.db.operation.duration` | Histogram | `ms` | Duration of the repository call inside a `link.create`/`link.resolve` trace, tagged with `operation` (`create`/`resolve`) |
+
+Health-check-specific metrics (`linker.healthcheck.*`) are documented in [`HEALTHCHECK.md`](HEALTHCHECK.md#metrics) since they belong to the `linker.health` package.
 
 ### Traces (2 traces, 2 spans each — minimum met)
 
@@ -101,16 +106,20 @@ Export is controlled entirely by the standard OpenTelemetry environment variable
 
 | Variable | Purpose | Default if unset |
 | --- | --- | --- |
-| `OTEL_SERVICE_NAME` | Service name attached to every span/metric/log | `linker1` (set explicitly in `deploy.sh`/`cloud-init.yaml`) |
+| `OTEL_SERVICE_NAME` | Service name attached to every span/metric/log | `linker1` (set explicitly in `deploy.sh`/`cloud-init.yaml`/`pipeline.yml`) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Collector endpoint (e.g. a Grafana Cloud OTLP gateway URL) | Unset: the SDK's autoconfigure module falls back to its own default (`http://localhost:4317`, `grpc` protocol) and simply fails to export silently-per-batch if nothing is listening there — it does **not** prevent the app from starting. |
-| `OTEL_EXPORTER_OTLP_PROTOCOL` | `grpc` (default for this SDK) or `http/protobuf` | `grpc` |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | `grpc` (default for this SDK) or `http/protobuf` | `grpc` -- but hardcoded to `http/protobuf` in `deploy.sh`/`cloud-init.yaml`/`pipeline.yml` (see below) |
 | `OTEL_EXPORTER_OTLP_HEADERS` | Auth headers, e.g. `Authorization=Basic ...` for Grafana Cloud | none |
 
 **Important operational detail, verified directly**: if `OTEL_EXPORTER_OTLP_ENDPOINT` is set to an **empty string** (as opposed to being entirely absent), the SDK throws `ConfigurationException: OTLP endpoint must be a valid URL` and the application **fails to start**. `deploy.sh` and `cloud-init.yaml` account for this: the `Environment="OTEL_EXPORTER_OTLP_ENDPOINT=..."` line is only written into the systemd unit when a real value is provided; if none is, the variable is omitted entirely rather than set to `""`.
 
+**Why `OTEL_EXPORTER_OTLP_PROTOCOL` is hardcoded to `http/protobuf`, not left to default**: the SDK's default is `grpc`, but Grafana Cloud's OTLP gateway (`otlp-gateway-*.grafana.net`) only accepts `http/protobuf` over HTTPS -- a real deploy with the protocol left unset produced `Failed to export ... Server responded with UNIMPLEMENTED`, silently, on every export batch, with no impact on app health (`/` and `/healthz` both kept returning 200 throughout, which is exactly why this was hard to notice: the app looked completely healthy while quietly exporting nothing). Since this is a fixed integration choice rather than a secret, it's hardcoded directly in the unit rather than read from an env var.
+
+**The endpoint must include the `/otlp` path** (e.g. `https://otlp-gateway-prod-us-east-3.grafana.net/otlp`, not just the bare host) -- with `http/protobuf`, the SDK appends `/v1/traces`, `/v1/metrics`, `/v1/logs` to whatever `OTEL_EXPORTER_OTLP_ENDPOINT` is set to, so omitting `/otlp` sends every export to the wrong path on Grafana's gateway (also failing silently, same symptom as the protocol issue above).
+
 ### Setting it up for Grafana Cloud
 
-1. From the Grafana Cloud stack's "Connections > OpenTelemetry" page, get the OTLP gateway URL and an API token.
+1. From the Grafana Cloud stack's "Connections > OpenTelemetry" page, get the OTLP gateway URL (must end in `/otlp`) and an API token.
 2. On the VM (or when redeploying), export before running `deploy.sh`:
 
    ```bash
@@ -118,6 +127,8 @@ Export is controlled entirely by the standard OpenTelemetry environment variable
    export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic <base64-encoded-instance-id:api-token>"
    bash deploy.sh
    ```
+
+   `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf` does not need to be exported -- it's hardcoded into the systemd unit directly.
 
 3. `deploy.sh` preserves whatever value is already configured on redeploy if the variable isn't passed again, the same way it already does for `LD_SDK_KEY`.
 

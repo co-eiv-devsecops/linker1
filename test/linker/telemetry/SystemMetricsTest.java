@@ -39,6 +39,33 @@ class SystemMetricsTest {
         assertTrue(point.getValue() >= 0);
     }
 
+    @Test
+    void recordHeapUsageRecordsAPositiveMaxValue() {
+        systemMetrics.recordHeapUsage();
+
+        var metric = findMetric("linker.jvm.heap.max");
+        var point = metric.getLongGaugeData().getPoints().iterator().next();
+        assertTrue(point.getValue() > 0);
+    }
+
+    @Test
+    void recordThreadCountRecordsAPositiveValue() {
+        systemMetrics.recordThreadCount();
+
+        var metric = findMetric("linker.jvm.threads");
+        var point = metric.getLongGaugeData().getPoints().iterator().next();
+        assertTrue(point.getValue() > 0);
+    }
+
+    @Test
+    void recordUptimeRecordsANonNegativeValue() {
+        systemMetrics.recordUptime();
+
+        var metric = findMetric("linker.process.uptime");
+        var point = metric.getLongGaugeData().getPoints().iterator().next();
+        assertTrue(point.getValue() >= 0);
+    }
+
     private io.opentelemetry.sdk.metrics.data.MetricData findMetric(String name) {
         return reader.collectAllMetrics().stream()
                 .filter(m -> m.getName().equals(name))

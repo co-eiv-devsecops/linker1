@@ -2,6 +2,7 @@ package linker.health;
 
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.StatusCode;
+import io.opentelemetry.sdk.metrics.SdkMeterProvider;
 import io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
 import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor;
@@ -20,6 +21,7 @@ class HealthCheckTest {
 
     InMemorySpanExporter spanExporter;
     io.opentelemetry.api.trace.Tracer tracer;
+    HealthCheckMetrics metrics;
 
     @BeforeEach
     void setUp() {
@@ -28,12 +30,13 @@ class HealthCheckTest {
                 .addSpanProcessor(SimpleSpanProcessor.create(spanExporter))
                 .build();
         tracer = tracerProvider.get("test");
+        metrics = new HealthCheckMetrics(SdkMeterProvider.builder().build().get("test"));
     }
 
     @Test
     void checkReturnsHealthyWhenConnectionAndQuerySucceed() throws SQLException {
         Connection conn = DriverManager.getConnection("jdbc:sqlite::memory:");
-        var healthCheck = new HealthCheck(tracer, () -> conn);
+        var healthCheck = new HealthCheck(tracer, () -> conn, metrics);
 
         var result = healthCheck.check();
 
@@ -45,7 +48,7 @@ class HealthCheckTest {
     @Test
     void checkProducesAServerKindSpanNamedMysqlHealthcheck() throws SQLException {
         Connection conn = DriverManager.getConnection("jdbc:sqlite::memory:");
-        var healthCheck = new HealthCheck(tracer, () -> conn);
+        var healthCheck = new HealthCheck(tracer, () -> conn, metrics);
 
         healthCheck.check();
 
@@ -60,7 +63,7 @@ class HealthCheckTest {
     @Test
     void checkMarksSpanOkWhenHealthy() throws SQLException {
         Connection conn = DriverManager.getConnection("jdbc:sqlite::memory:");
-        var healthCheck = new HealthCheck(tracer, () -> conn);
+        var healthCheck = new HealthCheck(tracer, () -> conn, metrics);
 
         healthCheck.check();
 
@@ -73,7 +76,7 @@ class HealthCheckTest {
     void checkReturnsUnhealthyWhenConnectionSupplierThrows() {
         var healthCheck = new HealthCheck(tracer, () -> {
             throw new RuntimeException("connection refused");
-        });
+        }, metrics);
 
         var result = healthCheck.check();
 
@@ -85,7 +88,7 @@ class HealthCheckTest {
     void checkMarksSpanErrorWhenConnectionSupplierThrows() {
         var healthCheck = new HealthCheck(tracer, () -> {
             throw new RuntimeException("connection refused");
-        });
+        }, metrics);
 
         healthCheck.check();
 
@@ -98,7 +101,7 @@ class HealthCheckTest {
     void checkReturnsUnhealthyWhenQueryFails() throws SQLException {
         Connection conn = DriverManager.getConnection("jdbc:sqlite::memory:");
         conn.close();
-        var healthCheck = new HealthCheck(tracer, () -> conn);
+        var healthCheck = new HealthCheck(tracer, () -> conn, metrics);
 
         var result = healthCheck.check();
 

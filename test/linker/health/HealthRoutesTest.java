@@ -1,6 +1,7 @@
 package linker.health;
 
 import io.javalin.Javalin;
+import io.opentelemetry.sdk.metrics.SdkMeterProvider;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
 import org.junit.jupiter.api.Test;
 
@@ -20,8 +21,9 @@ class HealthRoutesTest {
     @Test
     void healthzReturns200WhenDatabaseReachable() throws Exception {
         var tracer = SdkTracerProvider.builder().build().get("test");
+        var metrics = new HealthCheckMetrics(SdkMeterProvider.builder().build().get("test"));
         var conn = DriverManager.getConnection("jdbc:sqlite::memory:");
-        var healthCheck = new HealthCheck(tracer, () -> conn);
+        var healthCheck = new HealthCheck(tracer, () -> conn, metrics);
         var app = Javalin.create().start(0);
         try {
             new HealthRoutes(healthCheck).register(app);
@@ -39,9 +41,10 @@ class HealthRoutesTest {
     @Test
     void healthzReturns503WhenDatabaseUnreachable() throws Exception {
         var tracer = SdkTracerProvider.builder().build().get("test");
+        var metrics = new HealthCheckMetrics(SdkMeterProvider.builder().build().get("test"));
         var healthCheck = new HealthCheck(tracer, () -> {
             throw new RuntimeException("connection refused");
-        });
+        }, metrics);
         var app = Javalin.create().start(0);
         try {
             new HealthRoutes(healthCheck).register(app);

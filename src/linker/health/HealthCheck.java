@@ -36,10 +36,12 @@ public class HealthCheck {
 
     private final Tracer tracer;
     private final Supplier<Connection> connectionSupplier;
+    private final HealthCheckMetrics metrics;
 
-    public HealthCheck(Tracer tracer, Supplier<Connection> connectionSupplier) {
+    public HealthCheck(Tracer tracer, Supplier<Connection> connectionSupplier, HealthCheckMetrics metrics) {
         this.tracer = tracer;
         this.connectionSupplier = connectionSupplier;
+        this.metrics = metrics;
     }
 
     public Result check() {
@@ -49,8 +51,11 @@ public class HealthCheck {
                 .setAttribute("db.statement", "SELECT 1")
                 .startSpan();
 
+        long start = System.currentTimeMillis();
         try (Scope scope = span.makeCurrent()) {
-            return runCheck(span);
+            Result result = runCheck(span);
+            metrics.recordCheck(result.healthy(), System.currentTimeMillis() - start);
+            return result;
         } finally {
             span.end();
         }

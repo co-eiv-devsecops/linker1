@@ -35,7 +35,6 @@ variable "otel_exporter_otlp_endpoint" {
   type        = string
   default     = ""
 }
-
 variable "otel_exporter_otlp_headers" {
   description = "OTLP exporter auth headers (e.g. \"Authorization=Basic <token>\" for Grafana Cloud). Left empty, no auth headers are sent."
   type        = string

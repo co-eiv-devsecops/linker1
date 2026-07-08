@@ -257,7 +257,12 @@ jobs:
       - name: Set unique CI package version
         run: |
           BASE_VERSION=$(mvn -q -DforceStdout help:evaluate -Dexpression=project.version)
-          CI_VERSION="${BASE_VERSION}-ci.${GITHUB_RUN_NUMBER}.${GITHUB_SHA::7}"
+          # run_attempt (not just run_number) so a manual re-run of this exact job -- or
+          # any other reason the previous attempt already published this version, e.g. it
+          # uploaded successfully but the job was reported as failed for an unrelated
+          # reason -- gets its own version instead of colliding with a 409 Conflict
+          # against the immutable version GitHub Packages already has on file.
+          CI_VERSION="${BASE_VERSION}-ci.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}.${GITHUB_SHA::7}"
           echo "Publishing GitHub Package version: ${CI_VERSION}"
           mvn -B -ntp versions:set -DnewVersion="${CI_VERSION}" -DgenerateBackupPoms=false
 
