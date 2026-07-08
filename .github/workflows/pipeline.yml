@@ -168,11 +168,25 @@ jobs:
             sudo systemctl enable linker1.service
             sudo systemctl restart linker1.service
 
-            sleep 3
-            systemctl is-active --quiet linker1.service
+            sleep 5
+            if ! systemctl is-active --quiet linker1.service; then
+              echo "::error::linker1.service is not active after restart -- dumping diagnostics"
+              sudo systemctl status linker1.service --no-pager -l || true
+              echo "--- systemd-analyze verify ---"
+              sudo systemd-analyze verify /etc/systemd/system/linker1.service || true
+              echo "--- last 100 log lines ---"
+              sudo journalctl -u linker1.service --no-pager -n 100 || true
+              exit 1
+            fi
 
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/)
-            test "$STATUS" = "200"
+            if [ "$STATUS" != "200" ]; then
+              echo "::error::GET / returned $STATUS instead of 200 -- dumping diagnostics"
+              sudo systemctl status linker1.service --no-pager -l || true
+              echo "--- last 100 log lines ---"
+              sudo journalctl -u linker1.service --no-pager -n 100 || true
+              exit 1
+            fi
 
             HEALTHZ_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/healthz)
             echo "Healthcheck status: $HEALTHZ_STATUS (non-blocking -- MySQL may not be configured for this environment yet)"
