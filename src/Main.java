@@ -8,6 +8,7 @@ import linker.LinkRepository;
 import linker.LinkService;
 import linker.config.FeatureFlags;
 import linker.health.HealthCheck;
+import linker.health.HealthCheckMetrics;
 import linker.health.HealthRoutes;
 import linker.routes.LinkRoutes;
 import linker.routes.StaticRoutes;
@@ -63,12 +64,15 @@ public class Main {
                 throw new RuntimeException(e);
             }
         };
-        var healthCheck = new HealthCheck(telemetry.tracer(), mysqlConnectionSupplier);
+        var healthCheckMetrics = new HealthCheckMetrics(telemetry.meter());
+        var healthCheck = new HealthCheck(telemetry.tracer(), mysqlConnectionSupplier, healthCheckMetrics);
 
         var telemetryScheduler = Executors.newSingleThreadScheduledExecutor();
         telemetryScheduler.scheduleAtFixedRate(() -> {
             try {
                 systemMetrics.recordHeapUsage();
+                systemMetrics.recordThreadCount();
+                systemMetrics.recordUptime();
                 systemMetrics.setLinkCount(repository.countLinks());
             } catch (Exception e) {
                 log.warn("Failed to sample system metrics", e);

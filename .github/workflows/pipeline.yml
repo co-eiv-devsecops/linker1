@@ -51,6 +51,21 @@ jobs:
       OCI_BASTION_OCID: ${{ vars.OCI_BASTION_OCID }}
 
     steps:
+      - name: Base64-encode secrets for safe transport into the remote script
+        id: b64
+        run: |
+          b64() { printf '%s' "$1" | base64 -w0; }
+          {
+            echo "ld_sdk_key=$(b64 "${{ secrets.LD_SDK_KEY }}")"
+            echo "otel_endpoint=$(b64 "${{ vars.OTEL_EXPORTER_OTLP_ENDPOINT }}")"
+            echo "otel_headers=$(b64 "${{ secrets.OTEL_EXPORTER_OTLP_HEADERS }}")"
+            echo "mysql_host=$(b64 "${{ vars.MYSQL_HOST }}")"
+            echo "mysql_database=$(b64 "${{ vars.MYSQL_DATABASE }}")"
+            echo "mysql_user=$(b64 "${{ vars.MYSQL_USER }}")"
+            echo "mysql_pwd=$(b64 "${{ secrets.MYSQL_PWD }}")"
+            echo "log_level=$(b64 "${{ vars.LOG_LEVEL != '' && vars.LOG_LEVEL || 'INFO' }}")"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Deploy via OCI Bastion
         uses: co-eiv-devsecops/material-curso/actions/oci-bastion-deploy@main
         with:
@@ -59,8 +74,24 @@ jobs:
           target-path: /tmp/deploy/linker/${{ github.sha }}
           target-os-username: ubuntu
           oci-cli-cache-version: v1
+          # Every secret/variable below arrives base64-encoded (see the step above) and is
+          # decoded back to its real value only inside the remote script, never spliced as
+          # raw text into this YAML. `${{ }}` substitution happens before this script ever
+          # reaches the target VM, so a raw secret containing a quote, `$`, backtick, or the
+          # literal placeholder text from the course material (e.g. "<ponga_su_token>") would
+          # otherwise be interpreted as shell syntax on the remote end -- exactly what broke
+          # the previous deploy (OTEL_EXPORTER_OTLP_HEADERS still held that placeholder).
           script: |
             set -euo pipefail
+
+            LD_SDK_KEY=$(printf '%s' "${{ steps.b64.outputs.ld_sdk_key }}" | base64 -d)
+            OTEL_EXPORTER_OTLP_ENDPOINT=$(printf '%s' "${{ steps.b64.outputs.otel_endpoint }}" | base64 -d)
+            OTEL_EXPORTER_OTLP_HEADERS=$(printf '%s' "${{ steps.b64.outputs.otel_headers }}" | base64 -d)
+            MYSQL_HOST=$(printf '%s' "${{ steps.b64.outputs.mysql_host }}" | base64 -d)
+            MYSQL_DATABASE=$(printf '%s' "${{ steps.b64.outputs.mysql_database }}" | base64 -d)
+            MYSQL_USER=$(printf '%s' "${{ steps.b64.outputs.mysql_user }}" | base64 -d)
+            MYSQL_PWD=$(printf '%s' "${{ steps.b64.outputs.mysql_pwd }}" | base64 -d)
+            LOG_LEVEL=$(printf '%s' "${{ steps.b64.outputs.log_level }}" | base64 -d)
 
             JAR_SRC=$(find "$DEPLOY_PATH" -maxdepth 1 -name '*.jar' | head -n 1)
 
@@ -86,9 +117,9 @@ jobs:
             User=ubuntu
             Environment="LINKER_PORT=8080"
             Environment="LINKER_DB_PATH=/var/lib/linker1/linker1.db"
-            Environment="LD_SDK_KEY=${{ secrets.LD_SDK_KEY }}"
+            Environment="LD_SDK_KEY=$LD_SDK_KEY"
             Environment="OTEL_SERVICE_NAME=linker1"
-            Environment="LOG_LEVEL=${{ vars.LOG_LEVEL != '' && vars.LOG_LEVEL || 'INFO' }}"
+            Environment="LOG_LEVEL=$LOG_LEVEL"
             EOF
 
             # These are optional -- appended only when a real value is configured, since
@@ -101,12 +132,12 @@ jobs:
                 echo "Environment=\"$name=$value\"" | sudo tee -a /etc/systemd/system/linker1.service > /dev/null
               fi
             }
-            add_env_if_set OTEL_EXPORTER_OTLP_ENDPOINT "${{ vars.OTEL_EXPORTER_OTLP_ENDPOINT }}"
-            add_env_if_set OTEL_EXPORTER_OTLP_HEADERS "${{ secrets.OTEL_EXPORTER_OTLP_HEADERS }}"
-            add_env_if_set MYSQL_HOST "${{ vars.MYSQL_HOST }}"
-            add_env_if_set MYSQL_DATABASE "${{ vars.MYSQL_DATABASE }}"
-            add_env_if_set MYSQL_USER "${{ vars.MYSQL_USER }}"
-            add_env_if_set MYSQL_PWD "${{ secrets.MYSQL_PWD }}"
+            add_env_if_set OTEL_EXPORTER_OTLP_ENDPOINT "$OTEL_EXPORTER_OTLP_ENDPOINT"
+            add_env_if_set OTEL_EXPORTER_OTLP_HEADERS "$OTEL_EXPORTER_OTLP_HEADERS"
+            add_env_if_set MYSQL_HOST "$MYSQL_HOST"
+            add_env_if_set MYSQL_DATABASE "$MYSQL_DATABASE"
+            add_env_if_set MYSQL_USER "$MYSQL_USER"
+            add_env_if_set MYSQL_PWD "$MYSQL_PWD"
 
             sudo tee -a /etc/systemd/system/linker1.service > /dev/null <<EOF
 
@@ -170,6 +201,8 @@ jobs:
 
       - name: Resolve previous stable tag
         id: previous
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           CURRENT_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
           if [ -z "$CURRENT_TAG" ]; then
@@ -187,22 +220,51 @@ jobs:
           echo "Rollback version: $PREVIOUS_TAG"
           echo "tag=$PREVIOUS_TAG" >> "$GITHUB_OUTPUT"
 
+      # deploy-prod deploys a prebuilt jar straight to /opt/linker1 through the bastion
+      # and never touches a persistent git checkout on the VM, so /home/ubuntu/linker1
+      # (only created once, by cloud-init, on first boot) is not a reliable rollback
+      # source -- it drifts out of date and rollback.sh living there can be missing
+      # entirely on older VMs. Instead, pull the previous tag's own released jar
+      # (published by release.yml) and redeploy it the same way deploy-prod deploys
+      # the new one: as a GitHub Actions artifact fed to oci-bastion-deploy.
+      - name: Download previous release jar
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p rollback-artifact
+          gh release download "${{ steps.previous.outputs.tag }}" \
+            --pattern 'linker1-1.0-jar-with-dependencies.jar' \
+            --dir rollback-artifact --clobber
+
+      - name: Upload previous release jar as an artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linker-app-rollback
+          path: rollback-artifact/linker1-1.0-jar-with-dependencies.jar
+
       - name: Rollback via OCI Bastion
         uses: co-eiv-devsecops/material-curso/actions/oci-bastion-deploy@main
         with:
           instance-id: ${{ vars.OCI_INSTANCE_OCID }}
-          # rollback.sh rebuilds from the git checkout that already exists on the VM,
-          # it doesn't need a new jar -- the artifact already uploaded by Build is
-          # only reused here because artifact-name/target-path are required inputs
-          # of this action.
-          artifact-name: linker-app
+          artifact-name: linker-app-rollback
           target-path: /tmp/deploy/linker/rollback-${{ github.sha }}
           target-os-username: ubuntu
           oci-cli-cache-version: v1
           script: |
             set -euo pipefail
-            cd /home/ubuntu/linker1
-            bash scripts/rollback.sh ${{ steps.previous.outputs.tag }}
+
+            JAR_SRC=$(find "$DEPLOY_PATH" -maxdepth 1 -name '*.jar' | head -n 1)
+
+            sudo cp "$JAR_SRC" /opt/linker1/linker1.jar
+            sudo chown -R ubuntu:ubuntu /opt/linker1
+
+            sudo systemctl restart linker1.service
+
+            sleep 3
+            systemctl is-active --quiet linker1.service
+
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/)
+            test "$STATUS" = "200"
 
       - name: Verify rollback
         run: |

@@ -71,7 +71,7 @@ Two synchronous gauges (`LongGauge`, via `meter.gaugeBuilder(name).ofLongs().bui
 
 ## What's instrumented, concretely
 
-### Metrics (2 counters, 2 gauges, 2 histograms — minimum met)
+### Metrics
 
 | Name | Type | Unit | Meaning |
 | --- | --- | --- | --- |
@@ -79,8 +79,13 @@ Two synchronous gauges (`LongGauge`, via `meter.gaugeBuilder(name).ofLongs().bui
 | `linker.http.errors` | Counter | `{request}` | Total requests that returned >=400 |
 | `linker.links.count` | Gauge | `{link}` | Current number of stored short links |
 | `linker.jvm.heap.used` | Gauge | `By` | JVM heap memory currently in use |
+| `linker.jvm.heap.max` | Gauge | `By` | Maximum JVM heap memory available |
+| `linker.jvm.threads` | Gauge | `{thread}` | Current number of live JVM threads |
+| `linker.process.uptime` | Gauge | `s` | Time elapsed since the process started |
 | `linker.http.request.duration` | Histogram | `ms` | HTTP request duration, tagged with `route` and `status_code` |
 | `linker.db.operation.duration` | Histogram | `ms` | Duration of the repository call inside a `link.create`/`link.resolve` trace, tagged with `operation` (`create`/`resolve`) |
+
+Health-check-specific metrics (`linker.healthcheck.*`) are documented in [`HEALTHCHECK.md`](HEALTHCHECK.md#metrics) since they belong to the `linker.health` package.
 
 ### Traces (2 traces, 2 spans each — minimum met)
 

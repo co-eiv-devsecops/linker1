@@ -121,7 +121,7 @@ The CI pipeline (`.github/workflows/ci.yml`) runs on every `push` to `main`/`DEV
 
 ### GitHub Packages
 
-Every push to `main`/`DEV` publishes the built jar as a Maven package to **GitHub Packages** (`https://maven.pkg.github.com/co-eiv-devsecops/linker1`), configured via `distributionManagement` in `pom.xml`. Each CI-published version gets a unique, collision-free identifier (`<base-version>-ci.<run-number>.<short-sha>`), so re-running CI never conflicts with a previously published package. This gives the team a versioned, downloadable artifact history independent of GitHub Releases.
+Every push to `main`/`DEV` publishes the built jar as a Maven package to **GitHub Packages** (`https://maven.pkg.github.com/co-eiv-devsecops/linker1`), configured via `distributionManagement` in `pom.xml`. Each CI-published version gets a unique, collision-free identifier (`<base-version>-ci.<run-number>.<run-attempt>.<short-sha>`), so re-running CI (including a manual re-run of the same job) never conflicts with a previously published package. This gives the team a versioned, downloadable artifact history independent of GitHub Releases.
 
 ### Continuous deployment
 
