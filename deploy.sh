@@ -156,6 +156,7 @@ Environment="LINKER_PORT=8080"
 Environment="LINKER_DB_PATH=$DB_DIR/linker1.db"
 Environment="LD_SDK_KEY=$LD_SDK_KEY"
 Environment="OTEL_SERVICE_NAME=linker1"
+Environment="OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf"
 Environment="LOG_LEVEL=$LOG_LEVEL"
 EOF
 

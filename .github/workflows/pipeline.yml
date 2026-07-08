@@ -138,6 +138,7 @@ jobs:
             Environment="LINKER_DB_PATH=/var/lib/linker1/linker1.db"
             Environment="LD_SDK_KEY=$LD_SDK_KEY"
             Environment="OTEL_SERVICE_NAME=linker1"
+            Environment="OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf"
             Environment="LOG_LEVEL=$LOG_LEVEL"
             EOF
 
