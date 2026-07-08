@@ -286,8 +286,12 @@ linker1/
 │   ├── BRANCH_PROTECTION.md
 │   ├── FEATURE_FLAGS.md
 │   ├── LOGGING.md                 # LOG_LEVEL configuration
+<<<<<<< HEAD
 │   ├── INSTRUMENTATION.md         # OpenTelemetry metrics/traces/logs design
 │   └── HEALTHCHECK.md             # GET /healthz: MySQL SELECT 1, span, Grafana Synthetic Monitoring
+=======
+│   └── INSTRUMENTATION.md         # OpenTelemetry metrics/traces/logs design
+>>>>>>> 3217c524b03feaf1187cd4485ef575c1073bf5b7
 ├── infra/                        # Infrastructure as code (Terraform)
 │   ├── main.tf
 │   ├── variables.tf
@@ -311,9 +315,12 @@ linker1/
 │       │   ├── RequestMetrics.java  # RED-method HTTP counters/histogram
 │       │   ├── LinkSpans.java     # Traces for link create/resolve + DB duration histogram
 │       │   └── SystemMetrics.java  # Link-count and JVM heap gauges
+<<<<<<< HEAD
 │       ├── health/                # MySQL healthcheck, injected via constructor
 │       │   ├── HealthCheck.java   # SELECT 1 against MySQL, wrapped in a SpanKind.SERVER span
 │       │   └── HealthRoutes.java  # GET /healthz -> 200/503
+=======
+>>>>>>> 3217c524b03feaf1187cd4485ef575c1073bf5b7
 │       └── routes/                # HTTP handlers (Javalin), constructor-injected dependencies
 │           ├── LinkRoutes.java
 │           └── StaticRoutes.java
