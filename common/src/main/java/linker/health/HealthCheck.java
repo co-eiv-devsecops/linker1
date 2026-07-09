@@ -13,20 +13,6 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.function.Supplier;
 
-/**
- * Verifies connectivity to the MySQL backing service by running
- * {@code SELECT 1} against a fresh connection on every check -- this is a
- * liveness/backing-service probe, not a cached status, so it reflects the
- * database's real state at the moment {@code /healthz} is called.
- *
- * <p>The MySQL call is wrapped in a span of kind {@link SpanKind#SERVER},
- * per the course's explicit instrumentation requirement for this check.
- *
- * <p>Takes a {@code Supplier<Connection>} rather than a single long-lived
- * {@link Connection}: each check opens (and closes) its own connection, so a
- * database outage only ever fails an individual health check request instead
- * of crashing the whole application at startup or leaking a stale connection.
- */
 public class HealthCheck {
 
     private static final Logger log = LoggerFactory.getLogger(HealthCheck.class);

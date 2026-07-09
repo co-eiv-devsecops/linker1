@@ -5,15 +5,6 @@ import io.opentelemetry.api.metrics.LongCounter;
 import io.opentelemetry.api.metrics.LongHistogram;
 import io.opentelemetry.api.metrics.Meter;
 
-/**
- * RED-method metrics (Rate, Errors, Duration) for HTTP requests, following the
- * counter/histogram naming and unit conventions from the OpenTelemetry semantic
- * conventions for HTTP servers.
- *
- * <p>Callers never build {@link io.opentelemetry.api.metrics.Meter} instruments
- * themselves -- they call {@link #recordRequest(String, int, long)} once per
- * request, which is the entire integration surface.
- */
 public class RequestMetrics {
 
     private final LongCounter requestCounter;

@@ -8,18 +8,8 @@ import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Scope;
 
-/**
- * Traces the two user-facing operations of the link shortener: creating a link
- * and resolving one. Each is a single public method that wraps a whole
- * operation in a parent span and a validation/persistence step in a nested
- * child span, so a caller gets a full trace by making one method call instead
- * of hand-rolling span lifecycles. The duration of that child span (the actual
- * repository call) is also recorded in the {@code linker.db.operation.duration}
- * histogram, tagged by operation name.
- */
 public class LinkSpans {
 
-    /** A unit of work that may throw a checked exception, e.g. a repository call. */
     @FunctionalInterface
     public interface ThrowingSupplier<T, E extends Exception> {
         T get() throws E;
@@ -37,10 +27,6 @@ public class LinkSpans {
                 .build();
     }
 
-    /**
-     * Traces link creation as a parent "link.create" span containing a child
-     * "link.create.persist" span around the actual repository/service call.
-     */
     public <T, E extends Exception> T traceCreate(String url, ThrowingSupplier<T, E> persistWork) throws E {
         Span parent = tracer.spanBuilder("link.create")
                 .setAttribute("link.url", url)
@@ -52,10 +38,6 @@ public class LinkSpans {
         }
     }
 
-    /**
-     * Traces link resolution as a parent "link.resolve" span containing a
-     * child "link.resolve.lookup" span around the actual repository lookup.
-     */
     public <T, E extends Exception> T traceResolve(String id, ThrowingSupplier<T, E> lookupWork) throws E {
         Span parent = tracer.spanBuilder("link.resolve")
                 .setAttribute("link.id", id)

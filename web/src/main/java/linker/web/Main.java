@@ -1,3 +1,5 @@
+package linker.web;
+
 import io.javalin.Javalin;
 import java.sql.*;
 import java.util.concurrent.Executors;
@@ -46,11 +48,6 @@ public class Main {
         var linkSpans = new LinkSpans(telemetry.tracer(), telemetry.meter());
         var systemMetrics = new SystemMetrics(telemetry.meter());
 
-        // Registered explicitly: the fat jar's assembly step merges every
-        // dependency's META-INF/services/java.sql.Driver into one file with a
-        // "last one wins" strategy, which silently drops the MySQL driver's
-        // auto-registration in favor of SQLite's. Loading the class directly
-        // triggers its static registration block regardless of that merge.
         Class.forName("com.mysql.cj.jdbc.Driver");
         var mysqlHost = System.getenv().getOrDefault("MYSQL_HOST", "localhost");
         var mysqlDatabase = System.getenv().getOrDefault("MYSQL_DATABASE", "");
@@ -104,12 +101,8 @@ public class Main {
 
         FeatureFlags featureFlags = new FeatureFlags(ldClient);
 
-        // Routes are registered before the server starts listening, so the port
-        // never accepts a connection while it would otherwise 404 with no routes.
         var app = Javalin.create();
         new StaticRoutes(featureFlags).register(app);
-        // Registered before LinkRoutes: GET /{id} would otherwise treat
-        // "healthz" as a link id and shadow this exact-match route.
         new HealthRoutes(healthCheck).register(app);
         new LinkRoutes(service, requestMetrics, linkSpans).register(app);
         app.start(port);

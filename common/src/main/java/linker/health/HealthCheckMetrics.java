@@ -6,12 +6,6 @@ import io.opentelemetry.api.metrics.LongGauge;
 import io.opentelemetry.api.metrics.LongHistogram;
 import io.opentelemetry.api.metrics.Meter;
 
-/**
- * RED-method metrics for the MySQL health check ({@code GET /healthz}), following
- * the same pattern as {@link linker.telemetry.RequestMetrics}: callers never touch
- * a {@link Meter} instrument directly, they call {@link #recordCheck(boolean, long)}
- * once per check.
- */
 public class HealthCheckMetrics {
 
     private final LongCounter checksCounter;
