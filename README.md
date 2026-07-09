@@ -22,9 +22,9 @@ Linker1 is a web application that lets you:
 
 ## Requirements
 
-- **Java 21**
-- **Maven 3.7+**
-- **Git**
+-  **Java 21**
+-  **Maven 3.7+**
+-  **Git**
 
 ## Installation and Running on the VM
 
