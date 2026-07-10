@@ -1,6 +1,6 @@
 package linker.routes;
 
-import io.javalin.Javalin;
+import io.javalin.config.RoutesConfig;
 import linker.config.FeatureFlags;
 
 import java.io.InputStream;
@@ -19,14 +19,14 @@ public final class StaticRoutes {
         this.resourceLoader = resourceLoader;
     }
 
-    public void register(Javalin app) {
-        app.get("/", ctx -> {
+    public void register(RoutesConfig routes) {
+        routes.get("/", ctx -> {
             String path = featureFlags.isNewUiEnabled() ? "/v2/index-v2.html" : "/v1/index.html";
             String notFound = featureFlags.isNewUiEnabled() ? "index-v2.html not found" : "index.html not found";
             serve(ctx, path, "text/html", notFound);
         });
-        app.get("/app.js", ctx -> serve(ctx, "/app.js", "application/javascript", "app.js not found"));
-        app.get("/styles.css", ctx -> {
+        routes.get("/app.js", ctx -> serve(ctx, "/app.js", "application/javascript", "app.js not found"));
+        routes.get("/styles.css", ctx -> {
             String path = featureFlags.isNewUiEnabled() ? "/v2/styles2.css" : "/v1/styles.css";
             String notFound = featureFlags.isNewUiEnabled() ? "styles2.css not found" : "styles.css not found";
             serve(ctx, path, "text/css", notFound);
