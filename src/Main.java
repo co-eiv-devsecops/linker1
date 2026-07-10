@@ -104,14 +104,16 @@ public class Main {
 
         FeatureFlags featureFlags = new FeatureFlags(ldClient);
 
-        // Routes are registered before the server starts listening, so the port
-        // never accepts a connection while it would otherwise 404 with no routes.
-        var app = Javalin.create();
-        new StaticRoutes(featureFlags).register(app);
-        // Registered before LinkRoutes: GET /{id} would otherwise treat
-        // "healthz" as a link id and shadow this exact-match route.
-        new HealthRoutes(healthCheck).register(app);
-        new LinkRoutes(service, requestMetrics, linkSpans).register(app);
+        // Javalin 7 requires every route to be registered inside the config block,
+        // before the server exists -- registering routes on a live Javalin instance
+        // after creation (the Javalin 6 pattern) is no longer supported.
+        var app = Javalin.create(config -> {
+            new StaticRoutes(featureFlags).register(config.routes);
+            // Registered before LinkRoutes: GET /{id} would otherwise treat
+            // "healthz" as a link id and shadow this exact-match route.
+            new HealthRoutes(healthCheck).register(config.routes);
+            new LinkRoutes(service, requestMetrics, linkSpans).register(config.routes);
+        });
         app.start(port);
         log.info("Server started on port={}", port);
 

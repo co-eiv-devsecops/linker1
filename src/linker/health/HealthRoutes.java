@@ -1,6 +1,6 @@
 package linker.health;
 
-import io.javalin.Javalin;
+import io.javalin.config.RoutesConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -13,8 +13,8 @@ public final class HealthRoutes {
         this.healthCheck = healthCheck;
     }
 
-    public void register(Javalin app) {
-        app.get("/healthz", ctx -> {
+    public void register(RoutesConfig routes) {
+        routes.get("/healthz", ctx -> {
             log.trace("Received GET request on path={}", ctx.path());
             var result = healthCheck.check();
             if (result.healthy()) {
