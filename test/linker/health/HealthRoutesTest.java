@@ -24,9 +24,8 @@ class HealthRoutesTest {
         var metrics = new HealthCheckMetrics(SdkMeterProvider.builder().build().get("test"));
         var conn = DriverManager.getConnection("jdbc:sqlite::memory:");
         var healthCheck = new HealthCheck(tracer, () -> conn, metrics);
-        var app = Javalin.create().start(0);
+        var app = Javalin.create(config -> new HealthRoutes(healthCheck).register(config.routes)).start(0);
         try {
-            new HealthRoutes(healthCheck).register(app);
             var request = HttpRequest.newBuilder(URI.create("http://localhost:" + app.port() + "/healthz")).GET().build();
             var response = client.send(request, HttpResponse.BodyHandlers.ofString());
 
@@ -45,9 +44,8 @@ class HealthRoutesTest {
         var healthCheck = new HealthCheck(tracer, () -> {
             throw new RuntimeException("connection refused");
         }, metrics);
-        var app = Javalin.create().start(0);
+        var app = Javalin.create(config -> new HealthRoutes(healthCheck).register(config.routes)).start(0);
         try {
-            new HealthRoutes(healthCheck).register(app);
             var request = HttpRequest.newBuilder(URI.create("http://localhost:" + app.port() + "/healthz")).GET().build();
             var response = client.send(request, HttpResponse.BodyHandlers.ofString());
 
