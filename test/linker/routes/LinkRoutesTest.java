@@ -50,8 +50,7 @@ class LinkRoutesTest {
                 .build();
         var requestMetrics = new RequestMetrics(testOtel.getMeter("test"));
         var linkSpans = new LinkSpans(testOtel.getTracer("test"), testOtel.getMeter("test"));
-        app = Javalin.create().start(0);
-        new LinkRoutes(service, requestMetrics, linkSpans).register(app);
+        app = Javalin.create(config -> new LinkRoutes(service, requestMetrics, linkSpans).register(config.routes)).start(0);
         port = app.port();
     }
 

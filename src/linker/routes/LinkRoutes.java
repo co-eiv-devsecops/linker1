@@ -1,6 +1,6 @@
 package linker.routes;
 
-import io.javalin.Javalin;
+import io.javalin.config.RoutesConfig;
 import io.javalin.http.HttpStatus;
 import linker.AliasConflictException;
 import linker.LinkService;
@@ -24,8 +24,8 @@ public final class LinkRoutes {
         this.linkSpans = linkSpans;
     }
 
-    public void register(Javalin app) {
-        app.get("/{id}", ctx -> {
+    public void register(RoutesConfig routes) {
+        routes.get("/{id}", ctx -> {
             log.trace("Received GET request on path={}", ctx.path());
             var id = ctx.pathParam("id");
             long start = System.currentTimeMillis();
@@ -52,7 +52,7 @@ public final class LinkRoutes {
             }
         });
 
-        app.post("/link", ctx -> {
+        routes.post("/link", ctx -> {
             log.trace("Received POST request on path={}", ctx.path());
             long start = System.currentTimeMillis();
             var url = ctx.formParam("url");
