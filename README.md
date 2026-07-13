@@ -19,6 +19,8 @@ Linker1 is a web application that lets you:
 - `POST /link` — Creates a short link. JSON body: `{"url": "https://..."}`. If the URL already existed, responds `200` with the same code; if it's new, responds `201`.
   - Custom alias (optional): `{"url": "https://...", "alias": "my-alias"}`. Alias rules: letters, numbers, hyphen (`-`), and underscore (`_`) only, between 1 and 64 characters, no spaces. If the alias is already taken by another URL, responds `409`; if the alias is invalid, responds `400`.
 - `GET /{id}` — Redirects (`301`) to the URL associated with the short code or alias. Responds `404` if it doesn't exist.
+- `HEAD /{id}` — Resolves a short link. Responds `200` with the real URL in the response body if found (without redirecting), or `404` if not.
+- `DELETE /{id}` — Deletes a short link. Responds `204` on success, or `404` if the short code or alias doesn't exist.
 
 ## Requirements
 
