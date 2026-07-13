@@ -19,6 +19,7 @@ Triggers on every `push` to `main` (and manually via `workflow_dispatch`):
    - copies the jar to `/opt/linker1/linker1.jar`
    - rewrites the `systemd` unit (`linker1.service`), now including `Environment="LD_SDK_KEY=..."` (previously missing: `Main.java` calls `System.exit(1)` if that variable isn't present)
    - restarts the service and verifies `systemctl is-active` + `curl localhost:8080` → `200`
+   - then, back on the runner (not the VM), runs `scripts/check-grafana-metrics.sh` to confirm the instance is actually emitting telemetry into Grafana Cloud post-deploy — see [Optional: post-deploy Grafana telemetry check](#optional-post-deploy-grafana-telemetry-check) below and [`MONITORING.md`](MONITORING.md). This is why the job now also has a `Checkout repository` step: the earlier jobs didn't need the repo checked out on the runner itself, only this script does.
 3. **`validate-prod`**: read-only checks against `https://1.n-la-c.app` (`/`, `/app.js`, `/styles.css`, 404 on a nonexistent route). It doesn't repeat the mutating tests (create link, alias, conflict) because those are already covered by `ci.yml`'s `api-tests` job (Newman) against the same production instance; running them again on every deploy would just pollute the real database.
 4. **`rollback`**: triggers if `deploy-prod` or `validate-prod` fail. Resolves the previous SemVer tag (same as before) and now uses the same `oci-bastion-deploy` action (instead of raw SSH) to run `bash scripts/rollback.sh <tag>` on the checkout that already exists on the VM.
 
@@ -65,6 +66,18 @@ There is also an `OCI_VM_SSHKEY_CONTENT` secret in the repo that isn't used by t
 
 These need to be added with `gh secret set <NAME>` / `gh variable set <NAME>` (or via Settings > Secrets and variables > Actions) — since they're pulled from OCI Vault and the course's Grafana Cloud stack, only someone with access to those consoles can supply the real values.
 
+### Optional: post-deploy Grafana telemetry check
+
+`deploy-prod` also runs `scripts/check-grafana-metrics.sh` after the local `/healthz` check, to confirm the deployed instance is actually emitting metrics into Grafana Cloud (not just that `/healthz` answers locally on the VM). Same situation as above — **not yet configured in the repo**, so the step currently prints a warning and skips rather than failing the deploy:
+
+| Name | Type | Level | Use |
+| --- | --- | --- | --- |
+| `GRAFANA_PROM_QUERY_URL` | variable | repo or `prod` env | Grafana Cloud Prometheus/Mimir query endpoint |
+| `GRAFANA_PROM_USER` | variable | repo or `prod` env | Grafana Cloud Prometheus instance ID |
+| `GRAFANA_CLOUD_API_KEY` | secret | repo or `prod` env | Grafana Cloud API key/token, `metrics:read` scope |
+
+See [`MONITORING.md`](MONITORING.md#post-deploy-automated-check-bonus) for where to find these values and how the check behaves once configured.
+
 ## Open risks / things to verify
 
 - The remote `script:` assumes the `ubuntu` user has passwordless `sudo` on the VM (same assumption `deploy.sh` already makes). This is consistent with what the action itself needs for its artifact-copy step (`sudo tar -C $target_q -xf -`), so if the bastion didn't grant that access, the action's own "Copy artifact to target path" step would already fail before reaching our script.
@@ -73,6 +86,7 @@ These need to be added with `gh secret set <NAME>` / `gh variable set <NAME>` (o
 
 ## Related documents
 
+- [Monitoring (Grafana)](MONITORING.md) — dashboard, panel guide, and the post-deploy telemetry check
 - [Rollback Strategy](ROLLBACK_STRATEGY.md)
 - [`.github/workflows/pipeline.yml`](../.github/workflows/pipeline.yml)
 - [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)
