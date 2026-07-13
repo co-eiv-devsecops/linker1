@@ -191,6 +191,10 @@ Linker1 is instrumented with the [OpenTelemetry Java SDK](https://opentelemetry.
 
 `GET /healthz` runs `SELECT 1` against a MySQL connection (configured via `MYSQL_HOST`/`MYSQL_DATABASE`/`MYSQL_USER`/`MYSQL_PWD`) and returns `200 OK` or `503 Unhealthy: <detail>`, wrapped in its own `mysql.healthcheck` server-kind span. This is separate from Linker1's actual datastore (SQLite) — it exists purely so external monitors (e.g. Grafana Cloud Synthetic Monitoring) can poll a single endpoint to verify the deployed instance's MySQL dependency is reachable. See [`docs/HEALTHCHECK.md`](docs/HEALTHCHECK.md).
 
+### Monitoring dashboard
+
+A Grafana dashboard covering RED-method HTTP metrics, JVM/process gauges, `/healthz` up-down status, and link volume is committed at [`docs/grafana/linker1-dashboard.json`](docs/grafana/linker1-dashboard.json). `pipeline.yml`'s `deploy-prod` job also runs [`scripts/check-grafana-metrics.sh`](scripts/check-grafana-metrics.sh) after every deploy to confirm the new instance is actually emitting telemetry into Grafana Cloud, not just answering `/healthz` locally. See [`docs/MONITORING.md`](docs/MONITORING.md) for how to navigate the dashboard, a panel-by-panel incident guide, and the required (not yet configured) secrets for the automated check.
+
 
 ## Running with a Dev Container (Visual Studio Code)
 
@@ -288,7 +292,10 @@ linker1/
 │   ├── FEATURE_FLAGS.md
 │   ├── LOGGING.md                 # LOG_LEVEL configuration
 │   ├── INSTRUMENTATION.md         # OpenTelemetry metrics/traces/logs design
-│   └── HEALTHCHECK.md             # GET /healthz: MySQL SELECT 1, span, Grafana Synthetic Monitoring
+│   ├── HEALTHCHECK.md             # GET /healthz: MySQL SELECT 1, span, Grafana Synthetic Monitoring
+│   ├── MONITORING.md              # Grafana dashboard guide + post-deploy telemetry check
+│   └── grafana/
+│       └── linker1-dashboard.json # Exported/importable Grafana dashboard
 ├── infra/                        # Infrastructure as code (Terraform)
 │   ├── main.tf
 │   ├── variables.tf
@@ -329,7 +336,8 @@ linker1/
 │       └── styles2.css
 ├── scripts/
 │   ├── linker1                    # Executable launcher script (packaged alongside the jar)
-│   └── rollback.sh                # Rolls the VM back to a previous stable tag
+│   ├── rollback.sh                # Rolls the VM back to a previous stable tag
+│   └── check-grafana-metrics.sh   # Post-deploy check: confirms telemetry reached Grafana Cloud
 ├── pom.xml                        # Maven configuration (JaCoCo, GitHub Packages, LaunchDarkly SDK, OpenTelemetry)
 ├── deploy.sh                      # Deployment script (OCI)
 └── README.md                      # This file
