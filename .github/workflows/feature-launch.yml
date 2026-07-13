@@ -58,10 +58,14 @@ jobs:
       - name: Toggle flag via LaunchDarkly REST API
         shell: bash
         run: |
-          INSTRUCTION_KIND="${{ env.STATE == 'on' && 'turnFlagOn' || 'turnFlagOff' }}"
+          if [ "$STATE" = "on" ]; then
+            INSTRUCTION_KIND="turnFlagOn"
+          else
+            INSTRUCTION_KIND="turnFlagOff"
+          fi
 
           PAYLOAD=$(jq -n \
-            --arg comment "${{ env.COMMENT }}" \
+            --arg comment "${COMMENT}" \
             --arg kind "${INSTRUCTION_KIND}" \
             '{"comment": $comment, "instructions": [{"kind": $kind}]}')
 
@@ -99,10 +103,11 @@ jobs:
           fi
 
           IS_ON=$(echo "$BODY" | jq -r '.on')
-          TARGET="${{ env.STATE == 'on' && 'true' || 'false' }}"
 
-          if [ "$IS_ON" = "$TARGET" ]; then
-            echo "Verified: flag '${{ env.FLAG_KEY }}'.on = $IS_ON ✓"
+          if [ "$STATE" = "on" ] && [ "$IS_ON" = "true" ]; then
+            echo "Verified: flag '${FLAG_KEY}'.on = true ✓"
+          elif [ "$STATE" = "off" ] && [ "$IS_ON" = "false" ]; then
+            echo "Verified: flag '${FLAG_KEY}'.on = false ✓"
           else
-            echo "::warning::Flag state mismatch: expected .on=$TARGET, got .on=$IS_ON"
+            echo "::warning::Flag state mismatch: expected '$STATE', got .on=$IS_ON"
           fi
