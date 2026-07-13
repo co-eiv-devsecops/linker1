@@ -1,6 +1,6 @@
 # Monitoring (Grafana)
 
-Linker1 already exports metrics, traces, and logs to Grafana Cloud via OTLP (see [`INSTRUMENTATION.md`](INSTRUMENTATION.md)) and has a Synthetic Monitoring check polling `/healthz` (see [`HEALTHCHECK.md`](HEALTHCHECK.md#grafana-cloud-synthetic-monitoring)). This document covers the piece that was still missing: an actual dashboard to look at, what each panel means, and an automated check that a deploy really is emitting telemetry — not just that `/healthz` returns `200` on the VM.
+Linker1 is built to export metrics, traces, and logs to Grafana Cloud via OTLP (see [`INSTRUMENTATION.md`](INSTRUMENTATION.md)) and has a Synthetic Monitoring check polling `/healthz` (see [`HEALTHCHECK.md`](HEALTHCHECK.md#grafana-cloud-synthetic-monitoring)). This document covers the piece that was still missing: an actual dashboard to look at, what each panel means, and an automated check that a deploy really is emitting telemetry — not just that `/healthz` returns `200` on the VM. **As of the first real import, the export itself isn't wired up yet in production** — see [Troubleshooting](#troubleshooting-dashboard-shows-no-data-on-every-panel) below before assuming the dashboard or its queries are wrong.
 
 ---
 
@@ -45,6 +45,17 @@ OpenTelemetry metric names use dots (`linker.healthcheck.up`); once they land in
 | `linker.healthcheck.up` | `linker_healthcheck_up` | Gauge |
 
 All series are also labeled `service_name="linker1"` (from `OTEL_SERVICE_NAME`), which every panel filters on via the dashboard's `service_name` template variable.
+
+---
+
+## Troubleshooting: dashboard shows "No data" on every panel
+
+Verified after the first real import (2026-07-12): every panel showed "No data", including ones querying metric names (`linker_http_requests_total`, `linker_http_errors_total`) that autocompleted correctly in Explore's metric picker. Two things worth knowing so this doesn't cause confusion again:
+
+1. **`coralavocado2395.grafana.net` is a shared, course-wide stack, not linker1-exclusive.** Typing `linker` in the metric picker surfaces series from *every group's* project, not just this one — several groups appear to be instrumenting a similarly-named "Linker" URL shortener, so names like `linker_db_connection_state`, `linker_http_requests_in_flight`, or `linker_short_links_created_total` can show up despite not existing anywhere in this repo's code. Always disambiguate by the `service_name` (or `job`) label, e.g. run `{service_name="linker1"}` with no metric name to see only this project's own series before trusting a panel.
+2. **The actual cause here**: `{service_name="linker1"}` returned **zero series** — linker1's own instance has never successfully exported telemetry to this stack. This isn't a dashboard bug; it's the gap already called out in [`DEPLOYMENT.md`](DEPLOYMENT.md#optional-otlp-export-and-mysql-healthcheck) — `OTEL_EXPORTER_OTLP_ENDPOINT`/`OTEL_EXPORTER_OTLP_HEADERS` aren't configured as GitHub secrets/variables yet, so the OTel SDK on the VM has nowhere to send batches (see [`INSTRUMENTATION.md`](INSTRUMENTATION.md#otlp-export-configuration) — this fails silently, `/healthz` and `/` still return `200` throughout).
+
+**To fix**: configure `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_EXPORTER_OTLP_HEADERS` (see [`INSTRUMENTATION.md`](INSTRUMENTATION.md#setting-it-up-for-grafana-cloud) for where to get the gateway URL/token from Grafana Cloud's **Connections > OpenTelemetry** page), then redeploy (push to `main`, or `workflow_dispatch` on `pipeline.yml`). Give it a few minutes after the deploy for the first metrics batch to export and get ingested, then re-run `{service_name="linker1"}` in Explore to confirm before expecting the dashboard to populate. This is also exactly the condition the [post-deploy automated check](#post-deploy-automated-check-bonus) below is meant to catch on every future deploy, once its own secrets are configured too.
 
 ---
 
