@@ -20,6 +20,7 @@ The table below lists the active feature flags managed in the system:
 | Feature Flag | Description | Default State | Owner |
 | :--- | :--- | :--- | :--- |
 | `new-ui` | Enables the new version of the web interface (V2 Colombia Edition). | OFF | Development Team |
+| `head-delete` | Enables HEAD /{id} (metadata) and DELETE /{id} (remove link) endpoints. | OFF | Development Team |
 
 ---
 
@@ -124,12 +125,56 @@ By implementing this architecture and strategy, we have achieved the following:
 
 ---
 
-## Future Work
+## Pipeline-Driven Release Workflow
 
-As the application evolves, additional feature flags will be introduced to control other system behaviors:
-* `strict-url-validation`: Toggle stricter regex constraints on URL shortener submissions.
-* `custom-alias`: Manage availability of personalized link aliases.
-* `experimental-api`: Expose new REST endpoints for early adopters.
+In addition to manual toggling via the LaunchDarkly dashboard, feature flags can be managed through a dedicated **GitHub Actions workflow** (`feature-launch.yml`). This workflow is completely independent from `ci.yml`, `pipeline.yml`, and `release.yml` — it does **not** trigger any build, test, or deploy job. This enforces the decoupling between deployment and release.
+
+### Workflow: `feature-launch.yml`
+
+| Trigger | Inputs | Environment |
+| :--- | :--- | :--- |
+| `workflow_dispatch` (manual) | `flag-key`, `state` (on/off), `project-key`, `comment` | `LAUNCHDARKLY_API_KEY` (GitHub secret) |
+
+The workflow calls the [LaunchDarkly REST API](https://apidocs.launchdarkly.com/) (`PATCH /api/v2/flags/{project}/{flagKey}`) using the `turnFlagOn` / `turnFlagOff` instruction kinds. It does **not** use the LaunchDarkly SDK — the API access token is only used in CI, never baked into the application.
+
+### Required Setup
+
+1. Create a **LaunchDarkly API access token** (not an SDK key) in your LaunchDarkly dashboard: **Settings → Authorization → API access tokens**.
+2. Add the token as a GitHub Actions secret named `LAUNCHDARKLY_API_KEY` in the repository settings.
+3. Ensure the flag already exists in LaunchDarkly (created via dashboard or API).
+
+### Usage
+
+1. Go to your repository on GitHub → **Actions** → **Feature Launch** → **Run workflow**.
+2. Fill in the inputs:
+   - `flag-key`: The flag key (e.g., `new-ui`, `head-delete`).
+   - `state`: `on` to enable the feature, `off` to disable it.
+   - `project-key`: The LaunchDarkly project key (defaults to `default`).
+   - `comment`: Optional audit log message.
+3. Click **Run workflow**.
+
+The workflow will toggle the flag and confirm the new state via a read-back call.
+
+### Example: Dark Launch + Release
+
+This demonstrates the deploy/release decoupling for the `head-delete` flag:
+
+1. **Deploy**: Code for `HEAD /{id}` and `DELETE /{id}` is merged and deployed via `pipeline.yml` with the `head-delete` flag **OFF**. Users cannot see or use these endpoints.
+2. **Release**: Once testing is complete, run the **Feature Launch** workflow with `flag-key: head-delete` and `state: on`. The endpoints become active immediately — no rebuild, no redeploy.
+3. **Rollback**: If an issue is found, run the same workflow with `state: off` to instantly disable the feature.
+
+---
+
+## Candidate Features for Flag-Based Release
+
+The following upcoming features are good candidates for shipping behind a feature flag using this pipeline:
+
+| Feature | Flag Key | Rationale |
+| :--- | :--- | :--- |
+| HEAD /{id} and DELETE /{id} (#69) | `head-delete` | New HTTP methods that change API surface; safe to dark-launch until clients are ready. |
+| `strict-url-validation` | `strict-url-validation` | Toggle stricter regex constraints; canary before enforcing for all users. |
+| `custom-alias` | `custom-alias` | Manage availability of personalized link aliases during phased rollout. |
+| `experimental-api` | `experimental-api` | Expose new REST endpoints for early adopters without impacting general users. |
 
 ---
 
