@@ -51,6 +51,9 @@ jobs:
       OCI_BASTION_OCID: ${{ vars.OCI_BASTION_OCID }}
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Base64-encode secrets for safe transport into the remote script
         id: b64
         run: |
@@ -191,6 +194,13 @@ jobs:
 
             HEALTHZ_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/healthz)
             echo "Healthcheck status: $HEALTHZ_STATUS (non-blocking -- MySQL may not be configured for this environment yet)"
+
+      - name: Verify telemetry in Grafana Cloud post-deploy
+        env:
+          GRAFANA_PROM_QUERY_URL: ${{ vars.GRAFANA_PROM_QUERY_URL }}
+          GRAFANA_PROM_USER: ${{ vars.GRAFANA_PROM_USER }}
+          GRAFANA_CLOUD_API_KEY: ${{ secrets.GRAFANA_CLOUD_API_KEY }}
+        run: bash scripts/check-grafana-metrics.sh
   validate-prod:
     name: Validate Production
     needs: deploy-prod
