@@ -79,6 +79,84 @@ class LinkRoutesTest {
     }
 
     @Test
+    void headExistingIdReturns200WithContentLength() throws Exception {
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/existing")).method("HEAD", HttpRequest.BodyPublishers.noBody()).build();
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(200, response.statusCode());
+        assertEquals("", response.body());
+        assertEquals("19", response.headers().firstValue("Content-Length").orElse(null));
+    }
+
+    @Test
+    void headUnknownIdReturns404() throws Exception {
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/does-not-exist")).method("HEAD", HttpRequest.BodyPublishers.noBody()).build();
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(404, response.statusCode());
+    }
+
+    @Test
+    void deleteExistingIdReturns204AndSubsequentGetOrHeadReturns404() throws Exception {
+        var createRequest = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/link"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString("{\"url\":\"https://delete-me.example.com\"}"))
+                .build();
+        var createResponse = client.send(createRequest, HttpResponse.BodyHandlers.ofString());
+        var id = createResponse.body();
+
+        var deleteRequest = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/" + id)).DELETE().build();
+        var deleteResponse = client.send(deleteRequest, HttpResponse.BodyHandlers.ofString());
+        assertEquals(204, deleteResponse.statusCode());
+
+        var getRequest = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/" + id)).GET().build();
+        var getResponse = client.send(getRequest, HttpResponse.BodyHandlers.ofString());
+        assertEquals(404, getResponse.statusCode());
+
+        var headRequest = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/" + id)).method("HEAD", HttpRequest.BodyPublishers.noBody()).build();
+        var headResponse = client.send(headRequest, HttpResponse.BodyHandlers.ofString());
+        assertEquals(404, headResponse.statusCode());
+    }
+
+    @Test
+    void deleteUnknownIdReturns404() throws Exception {
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/does-not-exist")).DELETE().build();
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(404, response.statusCode());
+    }
+
+    @Test
+    void headAndToDeletePropagateExceptionReturns500() throws Exception {
+        var mockService = org.mockito.Mockito.mock(LinkService.class);
+        org.mockito.Mockito.when(mockService.get(org.mockito.Mockito.anyString())).thenThrow(new SQLException("db error"));
+        org.mockito.Mockito.when(mockService.delete(org.mockito.Mockito.anyString())).thenThrow(new SQLException("db error"));
+
+        var testOtel = OpenTelemetrySdk.builder()
+                .setTracerProvider(SdkTracerProvider.builder().build())
+                .setMeterProvider(SdkMeterProvider.builder().build())
+                .build();
+        var requestMetrics = new RequestMetrics(testOtel.getMeter("test"));
+        var linkSpans = new LinkSpans(testOtel.getTracer("test"), testOtel.getMeter("test"));
+
+        var tempApp = Javalin.create().start(0);
+        new LinkRoutes(mockService, requestMetrics, linkSpans).register(tempApp);
+        int tempPort = tempApp.port();
+        try {
+            var requestHead = HttpRequest.newBuilder(URI.create("http://localhost:" + tempPort + "/existing")).method("HEAD", HttpRequest.BodyPublishers.noBody()).build();
+            var responseHead = client.send(requestHead, HttpResponse.BodyHandlers.ofString());
+            assertEquals(500, responseHead.statusCode());
+
+            var requestDelete = HttpRequest.newBuilder(URI.create("http://localhost:" + tempPort + "/existing")).DELETE().build();
+            var responseDelete = client.send(requestDelete, HttpResponse.BodyHandlers.ofString());
+            assertEquals(500, responseDelete.statusCode());
+        } finally {
+            tempApp.stop();
+        }
+    }
+
+
+    @Test
     void postLinkWithValidUrlReturns201WithLocationHeader() throws Exception {
         var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/link"))
                 .header("Content-Type", "application/json")

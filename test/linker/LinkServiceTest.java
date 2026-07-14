@@ -47,6 +47,27 @@ class LinkServiceTest {
     }
 
     @Nested
+    @DisplayName("delete")
+    class DeleteTests {
+        @Test
+        void returnsTrueAndDeletesWhenIdExists() throws SQLException {
+            try (var ps = conn.prepareStatement("INSERT INTO shorturl (id, url) VALUES (?, ?)")) {
+                ps.setString(1, "abc12345");
+                ps.setString(2, "https://example.com");
+                ps.executeUpdate();
+            }
+
+            assertTrue(service.delete("abc12345"));
+            assertNull(service.get("abc12345"));
+        }
+
+        @Test
+        void returnsFalseForUnknownId() throws SQLException {
+            assertFalse(service.delete("missing1"));
+        }
+    }
+
+    @Nested
     @DisplayName("create")
     class CreateTests {
         @Test

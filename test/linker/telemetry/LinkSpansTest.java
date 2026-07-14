@@ -76,4 +76,29 @@ class LinkSpansTest {
         assertEquals(2, spans.size());
         spans.forEach(s -> assertEquals(io.opentelemetry.api.trace.StatusCode.ERROR, s.getStatus().getStatusCode()));
     }
+
+    @Test
+    void traceDeleteProducesParentAndChildSpans() {
+        var result = linkSpans.traceDelete("abc123", () -> true);
+
+        assertTrue(result);
+        var spans = spanExporter.getFinishedSpanItems();
+        assertEquals(2, spans.size());
+        assertTrue(spans.stream().anyMatch(s -> s.getName().equals("link.delete")));
+        assertTrue(spans.stream().anyMatch(s -> s.getName().equals("link.delete.persist")));
+    }
+
+    @Test
+    void traceDeleteRecordsDbOperationDurationHistogram() {
+        linkSpans.traceDelete("abc123", () -> true);
+
+        var metric = metricReader.collectAllMetrics().stream()
+                .filter(m -> m.getName().equals("linker.db.operation.duration"))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("Histogram not found"));
+        var points = metric.getHistogramData().getPoints();
+        assertEquals(1, points.size());
+        assertEquals("delete", points.iterator().next().getAttributes().get(io.opentelemetry.api.common.AttributeKey.stringKey("operation")));
+    }
 }
+

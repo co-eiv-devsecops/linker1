@@ -67,6 +67,22 @@ public class LinkSpans {
         }
     }
 
+    /**
+     * Traces link deletion as a parent "link.delete" span containing a child
+     * "link.delete.persist" span around the actual repository deletion call.
+     */
+    public <T, E extends Exception> T traceDelete(String id, ThrowingSupplier<T, E> deleteWork) throws E {
+        Span parent = tracer.spanBuilder("link.delete")
+                .setAttribute("link.id", id)
+                .startSpan();
+        try (Scope parentScope = parent.makeCurrent()) {
+            return runChildSpan("link.delete.persist", "delete", deleteWork, parent);
+        } finally {
+            parent.end();
+        }
+    }
+
+
     private <T, E extends Exception> T runChildSpan(String spanName, String operation, ThrowingSupplier<T, E> work, Span parent) throws E {
         Span child = tracer.spanBuilder(spanName).startSpan();
         long start = System.currentTimeMillis();
