@@ -73,7 +73,12 @@ jobs:
       green-instance-id: ${{ steps.tf-output.outputs.instance_id }}
     env:
       # Terraform variables — mapped from existing repo secrets/vars.
-      TF_VAR_region:                       ${{ vars.OCI_CLI_REGION }}
+      TF_VAR_region:                       ${{ vars.OCI_CLI_REGION || 'sa-bogota-1' }}
+      # OCI provider auth passed explicitly so no ~/.oci/config is needed on the runner.
+      TF_VAR_tenancy_ocid:                 ${{ secrets.OCI_CLI_TENANCY }}
+      TF_VAR_user_ocid:                    ${{ secrets.OCI_CLI_USER }}
+      TF_VAR_fingerprint:                  ${{ secrets.OCI_CLI_FINGERPRINT }}
+      TF_VAR_private_key:                  ${{ secrets.OCI_CLI_KEY_CONTENT }}
       TF_VAR_compartment_id:               ${{ vars.TF_COMPARTMENT_ID }}
       TF_VAR_subnet_id:                    ${{ vars.TF_SUBNET_ID }}
       TF_VAR_image_id:                     ${{ vars.TF_IMAGE_ID }}
@@ -91,24 +96,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Configure OCI credentials for Terraform
-        # The OCI Terraform provider reads ~/.oci/config by default.
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p ~/.oci
-          printf '%s' "$OCI_CLI_KEY_CONTENT" > ~/.oci/oci_api_key.pem
-          chmod 600 ~/.oci/oci_api_key.pem
-          {
-            echo "[DEFAULT]"
-            echo "user=${OCI_CLI_USER}"
-            echo "fingerprint=${OCI_CLI_FINGERPRINT}"
-            echo "tenancy=${OCI_CLI_TENANCY}"
-            echo "region=${OCI_CLI_REGION}"
-            echo "key_file=${HOME}/.oci/oci_api_key.pem"
-          } > ~/.oci/config
-          chmod 600 ~/.oci/config
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
@@ -218,7 +205,11 @@ jobs:
     if: ${{ always() && needs.provision-green.result == 'success' && needs.blue-green-lb-deploy.result == 'failure' }}
     runs-on: ubuntu-latest
     env:
-      TF_VAR_region:                       ${{ vars.OCI_CLI_REGION }}
+      TF_VAR_region:                       ${{ vars.OCI_CLI_REGION || 'sa-bogota-1' }}
+      TF_VAR_tenancy_ocid:                 ${{ secrets.OCI_CLI_TENANCY }}
+      TF_VAR_user_ocid:                    ${{ secrets.OCI_CLI_USER }}
+      TF_VAR_fingerprint:                  ${{ secrets.OCI_CLI_FINGERPRINT }}
+      TF_VAR_private_key:                  ${{ secrets.OCI_CLI_KEY_CONTENT }}
       TF_VAR_compartment_id:               ${{ vars.TF_COMPARTMENT_ID }}
       TF_VAR_subnet_id:                    ${{ vars.TF_SUBNET_ID }}
       TF_VAR_image_id:                     ${{ vars.TF_IMAGE_ID }}
@@ -241,23 +232,6 @@ jobs:
           name: green-tf-state-${{ github.run_id }}
           # Places terraform.tfstate into infra/ so `terraform destroy` finds it.
           path: infra/
-
-      - name: Configure OCI credentials for Terraform
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p ~/.oci
-          printf '%s' "$OCI_CLI_KEY_CONTENT" > ~/.oci/oci_api_key.pem
-          chmod 600 ~/.oci/oci_api_key.pem
-          {
-            echo "[DEFAULT]"
-            echo "user=${OCI_CLI_USER}"
-            echo "fingerprint=${OCI_CLI_FINGERPRINT}"
-            echo "tenancy=${OCI_CLI_TENANCY}"
-            echo "region=${OCI_CLI_REGION}"
-            echo "key_file=${HOME}/.oci/oci_api_key.pem"
-          } > ~/.oci/config
-          chmod 600 ~/.oci/config
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
