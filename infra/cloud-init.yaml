@@ -9,11 +9,18 @@ packages:
   - nginx
 
 runcmd:
+  # 2 GB swap so Maven doesn't OOM on small (1 GB RAM) Always-Free shapes.
+  - fallocate -l 2G /swapfile
+  - chmod 600 /swapfile
+  - mkswap /swapfile
+  - swapon /swapfile
+  - bash -c 'echo "/swapfile none swap sw 0 0" >> /etc/fstab'
+
   - mkdir -p /opt/linker1
   - mkdir -p /var/lib/linker1
   - mkdir -p /var/www/linker1
   - git clone ${repo_url} /home/ubuntu/linker1
-  - cd /home/ubuntu/linker1 && mvn clean package
+  - cd /home/ubuntu/linker1 && mvn -q clean package -DskipTests
   - >
     JAR_FILE=$(find /home/ubuntu/linker1/target -name '*-jar-with-dependencies.jar' | head -n 1) &&
     cp "$JAR_FILE" /opt/linker1/linker1.jar
