@@ -19,6 +19,10 @@ public class LinkService {
         return repository.findUrlById(id);
     }
 
+    public boolean delete(String id) throws SQLException {
+        return repository.delete(id);
+    }
+
     public Link create(String url) throws SQLException {
         return createResult(url).link();
     }
