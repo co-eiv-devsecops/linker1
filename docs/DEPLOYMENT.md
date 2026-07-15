@@ -1,6 +1,100 @@
 # Continuous Deployment Strategy
 
-## Context
+## Blue/Green Deployment (current)
+
+New versions of linker1 are now deployed as a **green VM** alongside the running **blue VM** using the shared OCI Load Balancer.  Nothing on the blue VM is touched until green is fully healthy and promoted.
+
+### Workflow: `.github/workflows/bluegreen.yml`
+
+Triggered on every push to `main` and via `workflow_dispatch`.
+
+```
+push to main
+    │
+    ▼
+[build]  ── fail fast: broken build never provisions a VM
+    │
+    ▼
+[provision-green]
+    terraform apply (infra/main.tf)
+    instance_display_name = vm-linker1-green-<run_id>
+    uploads terraform.tfstate as artifact for failure cleanup
+    │
+    ▼
+[blue-green-lb-deploy]  (calls oci-lb-bluegreen-ab.yml@main)
+    preflight: validate /healthz is the configured health-check path
+    stage_green_backend: add green VM to LB with drain=true
+    verify_green_health: poll OCI LB until green reports OK  (≤ 20 min)
+    start_ab_test: 90% blue / 10% green
+    observe_ab_test: 60 s observation window
+    verify_ab_health: confirm both backends still OK
+    promote_green: 100% green / 0% blue (drained)
+    ──── on any failure: rollback-to-current + remove-new-backend (LB side) ────
+    │
+    ├── success ──▶ [teardown-blue-on-success]
+    │                 oci compute instance terminate <blue-ocid>
+    │                 gh variable set OCI_INSTANCE_OCID = <green-ocid>
+    │
+    └── failure ──▶ [teardown-green-on-failure]
+                      terraform destroy (using saved state artifact)
+                      Blue VM untouched, OCI_INSTANCE_OCID unchanged
+```
+
+### Required secrets and variables — Blue/Green
+
+The OCI CLI secrets (`OCI_CLI_USER`, `OCI_CLI_TENANCY`, `OCI_CLI_FINGERPRINT`, `OCI_CLI_KEY_CONTENT`, `OCI_CLI_REGION`) and application secrets (`LD_SDK_KEY`, `MYSQL_*`, `OTEL_*`, `DEPLOYMENT_PUBLIC_KEY`) are shared with the legacy pipeline and do not need to be re-added.
+
+The following are **new** and must be added before the first run:
+
+| Name | Type | Level | Use |
+| --- | --- | --- | --- |
+| `OCI_LB_OCID` | variable | repo | OCID of the shared OCI Load Balancer (`OCI_LB_OCID` from `infra/linker.env`) |
+| `OCI_LB_LINKER_BACKEND` | variable | repo | Backend set name (`linker-1` — `OCI_LB_LINKER_BACKEND` from `infra/linker.env`) |
+| `TF_COMPARTMENT_ID` | variable | repo | OCI compartment OCID for the new VM |
+| `TF_SUBNET_ID` | variable | repo | Subnet OCID (`OCI_LINKER_SUBNET_OCID` from `infra/linker.env`) |
+| `TF_IMAGE_ID` | variable | repo | OCI image OCID used to create the VM |
+| `OCI_INSTANCE_OCID` | variable | repo | OCID of the current blue VM (updated automatically after each successful deploy; must be set manually for the very first run) |
+
+One-time setup commands (run from OCI Cloud Shell or locally with the OCI CLI configured):
+
+```bash
+gh variable set OCI_LB_OCID           --body "ocid1.loadbalancer.oc1.sa-bogota-1...."
+gh variable set OCI_LB_LINKER_BACKEND --body "linker-1"
+gh variable set TF_COMPARTMENT_ID     --body "ocid1.compartment.oc1..xxxxxxxx"
+gh variable set TF_SUBNET_ID          --body "ocid1.subnet.oc1.sa-bogota-1.xxxxxxxx"
+gh variable set TF_IMAGE_ID           --body "ocid1.image.oc1.sa-bogota-1.xxxxxxxx"
+gh variable set OCI_INSTANCE_OCID     --body "<current-blue-vm-ocid>"
+```
+
+`DEPLOYMENT_PUBLIC_KEY` (already a repo secret) is reused as the SSH key for the new VM.
+
+### Health check
+
+`/healthz` is the real health endpoint (runs `SELECT 1` against MySQL).  It is passed to the reusable workflow as `health-check-path: /healthz`.  The OCI LB must be configured with `/healthz` as its health-check URL path; the `preflight` job validates this before doing anything else.  See [`HEALTHCHECK.md`](HEALTHCHECK.md) for endpoint details.
+
+### Failure paths
+
+| Failure point | LB side (reusable workflow) | VM side (this workflow) |
+| --- | --- | --- |
+| Green health check fails | `remove-new-backend` | `teardown-green-on-failure`: `terraform destroy` |
+| A/B health check fails | `rollback-to-current` + `remove-new-backend` | `teardown-green-on-failure`: `terraform destroy` |
+| Promotion fails | `rollback-to-current` | `teardown-green-on-failure`: `terraform destroy` |
+
+In all failure cases: blue VM keeps 100% traffic, `OCI_INSTANCE_OCID` is unchanged, and the green VM is destroyed.
+
+### Notes
+
+- **Green VM builds from source**: `infra/cloud-init.yaml` runs `git clone + mvn clean package` on first boot.  It clones the repo's default branch HEAD, not the exact triggering commit.  The `build` job at the start of the workflow acts as a compile gate, but the compiled jar in CI is not transferred to the VM.
+- **`pipeline.yml` `deploy-prod` job**: references deleted VMs and will fail.  It is superseded by this workflow and should be removed as a follow-up.
+- **`variables: write`**: the `teardown-blue-on-success` job uses `GITHUB_TOKEN` with `permissions: actions: write` to call `gh variable set`.  If this fails due to org policy, create a PAT with `repo` scope, store it as `secrets.GH_PAT`, and replace `secrets.GITHUB_TOKEN` in that step.
+
+---
+
+## Legacy — Single-VM Deployment (superseded)
+
+The documentation below describes the old `pipeline.yml`-based single-VM deployment through an OCI Bastion.  The VMs it targeted have been deleted.  It is retained for historical context.
+
+### Context (legacy)
 
 Linker1 runs on a single OCI VM (production, `https://1.n-la-c.app`) created with the IaC in `infra/` (`assign_public_ip = false`: the instance has no public IP). Before this change, `.github/workflows/pipeline.yml` didn't deploy anything real: the `deploy-dev`, `validate-dev`, and `deploy-prod` jobs were placeholders that only did `echo`, and the one real job (`rollback`) assumed direct SSH to a public `VM_HOST` that never existed or was configured.
 

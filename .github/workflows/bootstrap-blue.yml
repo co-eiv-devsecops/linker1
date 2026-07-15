@@ -1,0 +1,157 @@
+name: Bootstrap blue VM (one-time)
+
+# Creates the very first "blue" VM, waits for it to become healthy, registers
+# it in the shared OCI Load Balancer backend set, and sets OCI_INSTANCE_OCID
+# so that bluegreen.yml can use it as the starting point for all future deploys.
+#
+# Run this workflow ONCE before running bluegreen.yml for the first time.
+# After a successful bluegreen.yml deploy, the VM rotation is fully automated.
+#
+# Pre-conditions — set these in GitHub Settings → Variables → Repository variables:
+#   TF_COMPARTMENT_ID   OCI compartment OCID
+#   TF_SUBNET_ID        Subnet OCID  (OCI_LINKER_SUBNET_OCID from infra/linker.env)
+#   TF_IMAGE_ID         OCI image OCID (Ubuntu 22.04 in sa-bogota-1)
+#   OCI_LB_OCID         Load balancer OCID (OCI_LB_OCID from infra/linker.env)
+#   OCI_LB_LINKER_BACKEND  Backend set name (linker-1)
+#
+# Existing secrets reused automatically (no changes needed):
+#   OCI_CLI_USER / OCI_CLI_TENANCY / OCI_CLI_FINGERPRINT / OCI_CLI_KEY_CONTENT
+#   OCI_CLI_REGION  (variable)
+#   LD_SDK_KEY      DEPLOYMENT_PUBLIC_KEY   MYSQL_*   OTEL_*
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # Required so GITHUB_TOKEN can update the OCI_INSTANCE_OCID variable.
+  actions: write
+
+env:
+  OCI_CLI_USER:        ${{ secrets.OCI_CLI_USER }}
+  OCI_CLI_TENANCY:     ${{ secrets.OCI_CLI_TENANCY }}
+  OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+  OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+  OCI_CLI_REGION:      ${{ vars.OCI_CLI_REGION }}
+
+jobs:
+  bootstrap:
+    name: Create and register blue VM
+    runs-on: ubuntu-latest
+    env:
+      # Terraform variable mapping — same names used by bluegreen.yml.
+      TF_VAR_region:                      ${{ vars.OCI_CLI_REGION }}
+      TF_VAR_compartment_id:              ${{ vars.TF_COMPARTMENT_ID }}
+      TF_VAR_subnet_id:                   ${{ vars.TF_SUBNET_ID }}
+      TF_VAR_image_id:                    ${{ vars.TF_IMAGE_ID }}
+      TF_VAR_ssh_public_key:              ${{ secrets.DEPLOYMENT_PUBLIC_KEY }}
+      TF_VAR_ld_sdk_key:                  ${{ secrets.LD_SDK_KEY }}
+      TF_VAR_otel_exporter_otlp_endpoint: ${{ vars.OTEL_EXPORTER_OTLP_ENDPOINT }}
+      TF_VAR_otel_exporter_otlp_headers:  ${{ secrets.OTEL_EXPORTER_OTLP_HEADERS }}
+      TF_VAR_mysql_host:                  ${{ vars.MYSQL_HOST }}
+      TF_VAR_mysql_database:              ${{ vars.MYSQL_DATABASE }}
+      TF_VAR_mysql_user:                  ${{ vars.MYSQL_USER }}
+      TF_VAR_mysql_pwd:                   ${{ secrets.MYSQL_PWD }}
+      TF_VAR_instance_display_name:       vm-linker1-blue
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure OCI credentials for Terraform
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.oci
+          printf '%s' "$OCI_CLI_KEY_CONTENT" > ~/.oci/oci_api_key.pem
+          chmod 600 ~/.oci/oci_api_key.pem
+          {
+            echo "[DEFAULT]"
+            echo "user=${OCI_CLI_USER}"
+            echo "fingerprint=${OCI_CLI_FINGERPRINT}"
+            echo "tenancy=${OCI_CLI_TENANCY}"
+            echo "region=${OCI_CLI_REGION}"
+            echo "key_file=${HOME}/.oci/oci_api_key.pem"
+          } > ~/.oci/config
+          chmod 600 ~/.oci/config
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform init
+        working-directory: infra
+        run: terraform init -input=false
+
+      - name: Terraform apply — create blue VM
+        working-directory: infra
+        run: terraform apply -auto-approve -input=false
+
+      - name: Capture blue VM OCID and private IP
+        id: tf-output
+        working-directory: infra
+        run: |
+          echo "instance_id=$(terraform output -raw instance_id)"         >> "$GITHUB_OUTPUT"
+          echo "private_ip=$(terraform output -raw instance_private_ip)"  >> "$GITHUB_OUTPUT"
+
+      - name: Register blue VM in OCI Load Balancer backend set
+        # Adds the VM immediately — the OCI LB will show it as CRITICAL while
+        # cloud-init is running (Maven build takes ~8–10 min).  The next step
+        # waits until the LB reports OK before proceeding.
+        uses: oracle-actions/run-oci-cli-command@v1.3.2
+        with:
+          command: >-
+            lb backend create
+            --load-balancer-id "${{ vars.OCI_LB_OCID }}"
+            --backend-set-name "${{ vars.OCI_LB_LINKER_BACKEND }}"
+            --ip-address "${{ steps.tf-output.outputs.private_ip }}"
+            --port 80
+            --drain false
+            --offline false
+            --weight 100
+            --wait-for-state SUCCEEDED
+            --max-wait-seconds 300
+
+      - name: Wait for blue VM to become healthy in the LB
+        # cloud-init: package update + Maven build + service start ≈ 10–15 min.
+        # Polls every 30 s for up to 20 min (40 attempts).
+        shell: bash
+        env:
+          LB_OCID:      ${{ vars.OCI_LB_OCID }}
+          BACKEND_SET:  ${{ vars.OCI_LB_LINKER_BACKEND }}
+          BACKEND_NAME: ${{ steps.tf-output.outputs.private_ip }}:80
+        run: |
+          set -euo pipefail
+          attempts=40
+          interval=30
+          echo "Polling backend health: $BACKEND_NAME (max ${attempts} × ${interval}s)"
+          for i in $(seq 1 $attempts); do
+            status=$(oci lb backend-health get \
+              --load-balancer-id "$LB_OCID" \
+              --backend-set-name "$BACKEND_SET" \
+              --backend-name "$BACKEND_NAME" \
+              --query 'data.status' --raw-output 2>/dev/null || echo "QUERY_FAILED")
+            echo "Attempt $i/$attempts — status: $status"
+            if [ "$status" = "OK" ]; then
+              echo "Blue VM is healthy."
+              exit 0
+            fi
+            [ "$i" -lt "$attempts" ] && sleep "$interval"
+          done
+          echo "::warning::Blue VM did not reach health status OK within the wait window."
+          echo "The VM was created and registered. Check the OCI Console for details."
+          echo "You can still proceed — bluegreen.yml will handle health validation."
+
+      - name: Set OCI_INSTANCE_OCID to blue VM
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BLUE_OCID: ${{ steps.tf-output.outputs.instance_id }}
+        run: |
+          gh variable set OCI_INSTANCE_OCID \
+            --body "$BLUE_OCID" \
+            --repo "${{ github.repository }}"
+          echo "OCI_INSTANCE_OCID updated to: $BLUE_OCID"
+          echo ""
+          echo "Bootstrap complete. bluegreen.yml will now use this VM as the"
+          echo "starting blue backend for all future deploys."
