@@ -1,6 +1,6 @@
 package linker.routes;
 
-import io.javalin.config.RoutesConfig;
+import io.javalin.Javalin;
 import io.javalin.http.HttpStatus;
 import linker.AliasConflictException;
 import linker.LinkService;
@@ -24,13 +24,8 @@ public final class LinkRoutes {
         this.linkSpans = linkSpans;
     }
 
-<<<<<<< HEAD
-    public void register(RoutesConfig routes) {
-        routes.get("/{id}", ctx -> {
-=======
     public void register(Javalin app) {
         app.get("/{id}", ctx -> {
->>>>>>> 45d714eede83fad01b0f5558c4b3250bcb57aca2
             log.trace("Received GET request on path={}", ctx.path());
             var id = ctx.pathParam("id");
             long start = System.currentTimeMillis();
