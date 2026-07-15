@@ -95,4 +95,5 @@ The lab also asks for a Synthetic Monitoring check in Grafana Cloud that polls `
 
 - [Instrumentation](INSTRUMENTATION.md)
 - [Deployment](DEPLOYMENT.md)
+- [Monitoring (Grafana)](MONITORING.md) — dashboard covering `linker.healthcheck.*`, panel guide, and the automated post-deploy check that queries these metrics
 - [`src/linker/health/`](../src/linker/health/)

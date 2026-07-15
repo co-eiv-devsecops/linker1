@@ -1,0 +1,113 @@
+name: Feature Launch
+
+on:
+  workflow_dispatch:
+    inputs:
+      flag-key:
+        description: "LaunchDarkly flag key (e.g. new-ui)"
+        required: true
+        type: string
+      state:
+        description: "Target state for the flag"
+        required: true
+        type: choice
+        options:
+          - "on"
+          - "off"
+      project-key:
+        description: "LaunchDarkly project key (default: default)"
+        required: false
+        default: "default"
+        type: string
+      comment:
+        description: "Reason for this change (appears in audit log)"
+        required: false
+        default: "Toggled via feature-launch pipeline"
+        type: string
+
+concurrency:
+  group: feature-launch-${{ inputs.flag-key }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  toggle-flag:
+    name: Toggle Flag ${{ inputs.flag-key }} ${{ inputs.state }}
+    runs-on: ubuntu-latest
+
+    env:
+      LD_API_KEY: ${{ secrets.LAUNCHDARKLY_API_KEY }}
+      FLAG_KEY: ${{ inputs.flag-key }}
+      PROJECT_KEY: ${{ inputs.project-key }}
+      STATE: ${{ inputs.state }}
+      COMMENT: ${{ inputs.comment }}
+
+    steps:
+      - name: Validate required secret
+        run: |
+          if [ -z "$LD_API_KEY" ]; then
+            echo "::error::LAUNCHDARKLY_API_KEY secret is not set."
+            echo "Create an API access token in your LaunchDarkly dashboard"
+            echo "(Settings → Authorization → API access tokens) and add it as"
+            echo "a GitHub repository secret named LAUNCHDARKLY_API_KEY."
+            exit 1
+          fi
+
+      - name: Toggle flag via LaunchDarkly REST API
+        shell: bash
+        run: |
+          if [ "$STATE" = "on" ]; then
+            INSTRUCTION_KIND="turnFlagOn"
+          else
+            INSTRUCTION_KIND="turnFlagOff"
+          fi
+
+          PAYLOAD=$(jq -n \
+            --arg comment "${COMMENT}" \
+            --arg kind "${INSTRUCTION_KIND}" \
+            '{"comment": $comment, "instructions": [{"kind": $kind}]}')
+
+          RESPONSE=$(curl -sS -w "\n%{http_code}" \
+            -X PATCH \
+            "https://app.launchdarkly.com/api/v2/flags/${{ env.PROJECT_KEY }}/${{ env.FLAG_KEY }}" \
+            -H "Authorization: ${{ env.LD_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+
+          if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
+            echo "Flag '${{ env.FLAG_KEY }}' set to ${{ env.STATE }} successfully."
+          else
+            echo "::error::LaunchDarkly API returned HTTP $HTTP_CODE"
+            echo "$BODY"
+            exit 1
+          fi
+
+      - name: Confirm flag state
+        shell: bash
+        run: |
+          RESPONSE=$(curl -sS -w "\n%{http_code}" \
+            "https://app.launchdarkly.com/api/v2/flags/${{ env.PROJECT_KEY }}/${{ env.FLAG_KEY }}" \
+            -H "Authorization: ${{ env.LD_API_KEY }}")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::warning::Could not verify flag state (HTTP $HTTP_CODE)"
+            exit 0
+          fi
+
+          IS_ON=$(echo "$BODY" | jq -r '.on')
+
+          if [ "$STATE" = "on" ] && [ "$IS_ON" = "true" ]; then
+            echo "Verified: flag '${FLAG_KEY}'.on = true ✓"
+          elif [ "$STATE" = "off" ] && [ "$IS_ON" = "false" ]; then
+            echo "Verified: flag '${FLAG_KEY}'.on = false ✓"
+          else
+            echo "::warning::Flag state mismatch: expected '$STATE', got .on=$IS_ON"
+          fi

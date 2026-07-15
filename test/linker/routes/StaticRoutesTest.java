@@ -26,7 +26,12 @@ class StaticRoutesTest {
 
     @BeforeAll
     static void startServer() {
+<<<<<<< HEAD
         app = Javalin.create(config -> new StaticRoutes(disabledFlags).register(config.routes)).start(0);
+=======
+        app = Javalin.create().start(0);
+        new StaticRoutes(disabledFlags).register(app);
+>>>>>>> 45d714eede83fad01b0f5558c4b3250bcb57aca2
         port = app.port();
     }
 
@@ -66,6 +71,10 @@ class StaticRoutesTest {
     void getRootReturns404WhenResourceMissing() throws Exception {
         var missingResourceApp = Javalin.create(config -> new StaticRoutes(disabledFlags, resource -> null).register(config.routes)).start(0);
         try {
+<<<<<<< HEAD
+=======
+            new StaticRoutes(disabledFlags, resource -> null).register(missingResourceApp);
+>>>>>>> 45d714eede83fad01b0f5558c4b3250bcb57aca2
             var missingPort = missingResourceApp.port();
 
             var request = HttpRequest.newBuilder(URI.create("http://localhost:" + missingPort + "/")).GET().build();
@@ -82,6 +91,10 @@ class StaticRoutesTest {
     void getAppJsReturns404WhenResourceMissing() throws Exception {
         var missingResourceApp = Javalin.create(config -> new StaticRoutes(disabledFlags, resource -> null).register(config.routes)).start(0);
         try {
+<<<<<<< HEAD
+=======
+            new StaticRoutes(disabledFlags, resource -> null).register(missingResourceApp);
+>>>>>>> 45d714eede83fad01b0f5558c4b3250bcb57aca2
             var missingPort = missingResourceApp.port();
 
             var request = HttpRequest.newBuilder(URI.create("http://localhost:" + missingPort + "/app.js")).GET().build();
@@ -98,6 +111,10 @@ class StaticRoutesTest {
     void getStylesCssReturns404WhenResourceMissing() throws Exception {
         var missingResourceApp = Javalin.create(config -> new StaticRoutes(disabledFlags, resource -> null).register(config.routes)).start(0);
         try {
+<<<<<<< HEAD
+=======
+            new StaticRoutes(disabledFlags, resource -> null).register(missingResourceApp);
+>>>>>>> 45d714eede83fad01b0f5558c4b3250bcb57aca2
             var missingPort = missingResourceApp.port();
 
             var request = HttpRequest.newBuilder(URI.create("http://localhost:" + missingPort + "/styles.css")).GET().build();
@@ -116,6 +133,12 @@ class StaticRoutesTest {
             throw new RuntimeException("boom");
         }).register(config.routes)).start(0);
         try {
+<<<<<<< HEAD
+=======
+            new StaticRoutes(disabledFlags, resource -> {
+                throw new RuntimeException("boom");
+            }).register(failingResourceApp);
+>>>>>>> 45d714eede83fad01b0f5558c4b3250bcb57aca2
             var failingPort = failingResourceApp.port();
 
             var request = HttpRequest.newBuilder(URI.create("http://localhost:" + failingPort + "/")).GET().build();
@@ -136,8 +159,14 @@ class StaticRoutesTest {
                 return true;
             }
         };
+<<<<<<< HEAD
         var appWithFlags = Javalin.create(config -> new StaticRoutes(flagEnabledFlags).register(config.routes)).start(0);
         try {
+=======
+        var appWithFlags = Javalin.create().start(0);
+        try {
+            new StaticRoutes(flagEnabledFlags).register(appWithFlags);
+>>>>>>> 45d714eede83fad01b0f5558c4b3250bcb57aca2
             var testPort = appWithFlags.port();
 
             var request = HttpRequest.newBuilder(URI.create("http://localhost:" + testPort + "/")).GET().build();
@@ -158,8 +187,14 @@ class StaticRoutesTest {
                 return true;
             }
         };
+<<<<<<< HEAD
         var appWithFlags = Javalin.create(config -> new StaticRoutes(flagEnabledFlags).register(config.routes)).start(0);
         try {
+=======
+        var appWithFlags = Javalin.create().start(0);
+        try {
+            new StaticRoutes(flagEnabledFlags).register(appWithFlags);
+>>>>>>> 45d714eede83fad01b0f5558c4b3250bcb57aca2
             var testPort = appWithFlags.port();
 
             var request = HttpRequest.newBuilder(URI.create("http://localhost:" + testPort + "/styles.css")).GET().build();
