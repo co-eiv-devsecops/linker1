@@ -1,0 +1,273 @@
+name: Blue/Green Deployment
+
+# Deploys a new "green" VM alongside the currently-serving "blue" VM, wires
+# both into the shared OCI Load Balancer via the teacher's reusable workflow
+# (oci-lb-bluegreen-ab.yml), promotes green after health validation, and tears
+# down the old blue VM.  On any failure the reusable workflow restores 100%
+# traffic to blue; this workflow then destroys the green VM via Terraform.
+#
+# Pre-conditions (one-time setup):
+#   gh variable set OCI_LB_OCID        --body "ocid1.loadbalancer..."
+#   gh variable set OCI_LB_LINKER_BACKEND --body "linker-1"
+#   gh variable set TF_COMPARTMENT_ID  --body "ocid1.compartment..."
+#   gh variable set TF_SUBNET_ID       --body "ocid1.subnet..."  # = OCI_LINKER_SUBNET_OCID from linker.env
+#   gh variable set TF_IMAGE_ID        --body "ocid1.image..."
+#   gh variable set OCI_INSTANCE_OCID  --body "<current-blue-vm-ocid>"  # updated automatically on each successful deploy
+#   gh secret  set TF_SSH_PUBLIC_KEY   < ~/.ssh/linker_deploy.pub       # or reuse DEPLOYMENT_PUBLIC_KEY
+#
+# All other secrets/variables (OCI_CLI_*, LD_SDK_KEY, MYSQL_*, OTEL_*) are
+# already configured for pipeline.yml and are reused here without changes.
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# Serialise blue/green runs on the same branch — never cancel mid-deploy.
+concurrency:
+  group: bluegreen-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+# ─── shared OCI CLI env (consumed by oracle-actions/run-oci-cli-command) ────
+env:
+  OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
+  OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+  OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+  OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+  OCI_CLI_REGION: ${{ vars.OCI_CLI_REGION }}
+
+jobs:
+
+  # ── 1. Build gate ──────────────────────────────────────────────────────────
+  # Fail fast: if the build is broken, don't waste an OCI VM.
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Verify build compiles and packages
+        run: mvn -B -ntp package -DskipTests
+
+  # ── 2. Provision green VM ─────────────────────────────────────────────────
+  # Creates a brand-new OCI VM (green) using the existing infra/main.tf.
+  # The blue VM is not touched.  cloud-init clones the repo and starts the
+  # service; the LB health-check wait in the next job covers that warm-up.
+  provision-green:
+    name: Provision green VM
+    needs: build
+    runs-on: ubuntu-latest
+    outputs:
+      green-instance-id: ${{ steps.tf-output.outputs.instance_id }}
+    env:
+      # Terraform variables — mapped from existing repo secrets/vars.
+      TF_VAR_region:                       ${{ vars.OCI_CLI_REGION }}
+      TF_VAR_compartment_id:               ${{ vars.TF_COMPARTMENT_ID }}
+      TF_VAR_subnet_id:                    ${{ vars.TF_SUBNET_ID }}
+      TF_VAR_image_id:                     ${{ vars.TF_IMAGE_ID }}
+      TF_VAR_ssh_public_key:               ${{ secrets.DEPLOYMENT_PUBLIC_KEY }}
+      TF_VAR_ld_sdk_key:                   ${{ secrets.LD_SDK_KEY }}
+      TF_VAR_otel_exporter_otlp_endpoint:  ${{ vars.OTEL_EXPORTER_OTLP_ENDPOINT }}
+      TF_VAR_otel_exporter_otlp_headers:   ${{ secrets.OTEL_EXPORTER_OTLP_HEADERS }}
+      TF_VAR_mysql_host:                   ${{ vars.MYSQL_HOST }}
+      TF_VAR_mysql_database:               ${{ vars.MYSQL_DATABASE }}
+      TF_VAR_mysql_user:                   ${{ vars.MYSQL_USER }}
+      TF_VAR_mysql_pwd:                    ${{ secrets.MYSQL_PWD }}
+      # Unique display name scoped to this workflow run so retries don't clash.
+      TF_VAR_instance_display_name:        vm-linker1-green-${{ github.run_id }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure OCI credentials for Terraform
+        # The OCI Terraform provider reads ~/.oci/config by default.
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.oci
+          printf '%s' "$OCI_CLI_KEY_CONTENT" > ~/.oci/oci_api_key.pem
+          chmod 600 ~/.oci/oci_api_key.pem
+          {
+            echo "[DEFAULT]"
+            echo "user=${OCI_CLI_USER}"
+            echo "fingerprint=${OCI_CLI_FINGERPRINT}"
+            echo "tenancy=${OCI_CLI_TENANCY}"
+            echo "region=${OCI_CLI_REGION}"
+            echo "key_file=${HOME}/.oci/oci_api_key.pem"
+          } > ~/.oci/config
+          chmod 600 ~/.oci/config
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          # Disable the wrapper so `terraform output -raw` returns a plain string.
+          terraform_wrapper: false
+
+      - name: Terraform init
+        working-directory: infra
+        run: terraform init -input=false
+
+      - name: Terraform apply — create green VM
+        working-directory: infra
+        # infra/main.tf provisions a single oci_core_instance with the name
+        # set by TF_VAR_instance_display_name (set above).  This state file is
+        # independent of any previous blue-VM state; it only knows about the
+        # green VM it just created.
+        run: terraform apply -auto-approve -input=false
+
+      - name: Capture green VM OCID
+        id: tf-output
+        working-directory: infra
+        run: echo "instance_id=$(terraform output -raw instance_id)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Terraform state for failure cleanup
+        uses: actions/upload-artifact@v4
+        with:
+          name: green-tf-state-${{ github.run_id }}
+          path: infra/terraform.tfstate
+          # Retain long enough to cover any manual cleanup window.
+          retention-days: 7
+
+  # ── 3. Blue/green LB deploy ───────────────────────────────────────────────
+  # Delegates the full blue/green + A/B lifecycle to the teacher's reusable
+  # workflow.  Job sequence inside the callee:
+  #   preflight → stage_green_backend (drain=true) → verify_green_health
+  #   → start_ab_test (90/10) → observe_ab_test (60 s) → verify_ab_health
+  #   → promote_green (100/0) → deployment_result
+  # On any step failure the callee runs its own rollback/cleanup jobs before
+  # surfacing a failed result here.
+  blue-green-lb-deploy:
+    name: Blue/green LB deploy
+    needs: provision-green
+    uses: co-eiv-devsecops/material-curso/.github/workflows/oci-lb-bluegreen-ab.yml@main
+    with:
+      deployment-scenario: deploy
+      load-balancer-id:    ${{ vars.OCI_LB_OCID }}
+      backend-set-name:    ${{ vars.OCI_LB_LINKER_BACKEND }}
+      new-instance-id:     ${{ needs.provision-green.outputs.green-instance-id }}
+      current-instance-id: ${{ vars.OCI_INSTANCE_OCID }}
+      # /healthz runs SELECT 1 against MySQL; it is the real health endpoint.
+      health-check-path:   /healthz
+      # cloud-init clones the repo and runs mvn clean package before the service
+      # starts.  Allow up to 20 min (40 × 30 s) for the OCI LB to report OK.
+      health-wait-attempts: '40'
+      health-wait-seconds:  '30'
+      # Promote automatically after the A/B window — no manual intervention needed.
+      auto-promote:          true
+      ab-observation-seconds: '60'
+      # Remove the green backend from the LB if the reusable workflow rolls back,
+      # keeping the backend set clean for the next deploy attempt.
+      remove-new-on-rollback: true
+    secrets: inherit
+
+  # ── 4a. Tear down blue VM on success ──────────────────────────────────────
+  # After green is promoted (100% traffic), the old blue VM is terminated and
+  # OCI_INSTANCE_OCID is updated to point at the new green VM so the next
+  # deploy cycle knows which instance is "current".
+  teardown-blue-on-success:
+    name: Retire blue VM
+    needs: [provision-green, blue-green-lb-deploy]
+    if: ${{ always() && needs.blue-green-lb-deploy.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # actions: write is required for GITHUB_TOKEN to update repository variables.
+      actions: write
+    steps:
+      - name: Terminate blue VM
+        uses: oracle-actions/run-oci-cli-command@v1.3.2
+        with:
+          command: >-
+            compute instance terminate
+            --instance-id "${{ vars.OCI_INSTANCE_OCID }}"
+            --force
+            --wait-for-state TERMINATED
+            --max-wait-seconds 600
+
+      - name: Promote OCI_INSTANCE_OCID to green VM
+        # Makes the next blue/green deploy cycle use the newly-promoted VM as
+        # the "current" (blue) backend.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh variable set OCI_INSTANCE_OCID \
+            --body "${{ needs.provision-green.outputs.green-instance-id }}" \
+            --repo "${{ github.repository }}"
+
+  # ── 4b. Tear down green VM on failure ─────────────────────────────────────
+  # The reusable workflow already handled the LB side (rollback-to-current +
+  # remove-new-backend).  This job destroys the OCI compute instance so it
+  # doesn't keep running and accruing cost.  The blue VM is untouched and
+  # continues serving 100% traffic.
+  teardown-green-on-failure:
+    name: Destroy green VM after failed deploy
+    needs: [provision-green, blue-green-lb-deploy]
+    if: ${{ always() && needs.provision-green.result == 'success' && needs.blue-green-lb-deploy.result == 'failure' }}
+    runs-on: ubuntu-latest
+    env:
+      TF_VAR_region:                       ${{ vars.OCI_CLI_REGION }}
+      TF_VAR_compartment_id:               ${{ vars.TF_COMPARTMENT_ID }}
+      TF_VAR_subnet_id:                    ${{ vars.TF_SUBNET_ID }}
+      TF_VAR_image_id:                     ${{ vars.TF_IMAGE_ID }}
+      TF_VAR_ssh_public_key:               ${{ secrets.DEPLOYMENT_PUBLIC_KEY }}
+      TF_VAR_ld_sdk_key:                   ${{ secrets.LD_SDK_KEY }}
+      TF_VAR_otel_exporter_otlp_endpoint:  ${{ vars.OTEL_EXPORTER_OTLP_ENDPOINT }}
+      TF_VAR_otel_exporter_otlp_headers:   ${{ secrets.OTEL_EXPORTER_OTLP_HEADERS }}
+      TF_VAR_mysql_host:                   ${{ vars.MYSQL_HOST }}
+      TF_VAR_mysql_database:               ${{ vars.MYSQL_DATABASE }}
+      TF_VAR_mysql_user:                   ${{ vars.MYSQL_USER }}
+      TF_VAR_mysql_pwd:                    ${{ secrets.MYSQL_PWD }}
+      TF_VAR_instance_display_name:        vm-linker1-green-${{ github.run_id }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download green VM Terraform state
+        uses: actions/download-artifact@v4
+        with:
+          name: green-tf-state-${{ github.run_id }}
+          # Places terraform.tfstate into infra/ so `terraform destroy` finds it.
+          path: infra/
+
+      - name: Configure OCI credentials for Terraform
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.oci
+          printf '%s' "$OCI_CLI_KEY_CONTENT" > ~/.oci/oci_api_key.pem
+          chmod 600 ~/.oci/oci_api_key.pem
+          {
+            echo "[DEFAULT]"
+            echo "user=${OCI_CLI_USER}"
+            echo "fingerprint=${OCI_CLI_FINGERPRINT}"
+            echo "tenancy=${OCI_CLI_TENANCY}"
+            echo "region=${OCI_CLI_REGION}"
+            echo "key_file=${HOME}/.oci/oci_api_key.pem"
+          } > ~/.oci/config
+          chmod 600 ~/.oci/config
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform init
+        working-directory: infra
+        run: terraform init -input=false
+
+      - name: Terraform destroy — delete green VM
+        working-directory: infra
+        run: terraform destroy -auto-approve -input=false

@@ -1,0 +1,271 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Grafana Cloud Metrics (Prometheus/Mimir)",
+      "description": "The Prometheus-compatible datasource that receives linker1's OTLP metrics (Grafana Cloud's built-in \"grafanacloud-<stack>-prom\" datasource).",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "__requires": [
+    { "type": "grafana", "id": "grafana", "name": "Grafana", "version": "10.0.0" },
+    { "type": "datasource", "id": "prometheus", "name": "Prometheus", "version": "1.0.0" },
+    { "type": "panel", "id": "timeseries", "name": "Time series", "version": "" },
+    { "type": "panel", "id": "stat", "name": "Stat", "version": "" },
+    { "type": "panel", "id": "gauge", "name": "Gauge", "version": "" },
+    { "type": "panel", "id": "row", "name": "Row", "version": "" }
+  ],
+  "title": "Linker1 - Application & Health",
+  "description": "RED-method HTTP metrics, JVM/process gauges, /healthz status, and link volume for linker1. See docs/MONITORING.md for how to read each panel during an incident.",
+  "uid": "linker1-app-health",
+  "id": null,
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "graphTooltip": 1,
+  "timezone": "browser",
+  "time": { "from": "now-6h", "to": "now" },
+  "refresh": "1m",
+  "tags": ["linker1", "otel", "healthcheck"],
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROMETHEUS",
+        "type": "datasource",
+        "query": "prometheus",
+        "label": "Metrics datasource",
+        "current": {}
+      },
+      {
+        "name": "service_name",
+        "type": "constant",
+        "label": "service.name",
+        "query": "linker1",
+        "current": { "value": "linker1", "text": "linker1" },
+        "hide": 2
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "HTTP (RED method)",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Request rate",
+      "description": "rate(linker_http_requests_total[5m]) by route -- overall traffic volume. A sudden drop to zero right after a deploy usually means the new instance isn't receiving traffic (bad load balancer switchover), not that users stopped requesting links.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 1 },
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum by (route) (rate(linker_http_requests_total{service_name=\"$service_name\"}[5m]))",
+          "legendFormat": "{{route}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Error rate (%)",
+      "description": "100 * errors / requests, both as rate(...[5m]). The \"E\" in RED. Anything sustained above ~1-2% right after a deploy is worth investigating before the old version is retired in the blue/green switchover.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "custom": { "drawStyle": "line", "fillOpacity": 10 },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 1 }, { "color": "red", "value": 5 } ] }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "100 * sum(rate(linker_http_errors_total{service_name=\"$service_name\"}[5m])) / sum(rate(linker_http_requests_total{service_name=\"$service_name\"}[5m]))",
+          "legendFormat": "error rate"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Request duration (p50 / p95 / p99)",
+      "description": "histogram_quantile over linker_http_request_duration_milliseconds_bucket. The \"D\" in RED. Watch p99 specifically after a deploy -- a healthy request rate with a spiking p99 often means the new instance is up but struggling (cold JVM, GC pauses, DB connection pool warming up).",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 1 },
+      "fieldConfig": { "defaults": { "unit": "ms", "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(linker_http_request_duration_milliseconds_bucket{service_name=\"$service_name\"}[5m])))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(linker_http_request_duration_milliseconds_bucket{service_name=\"$service_name\"}[5m])))",
+          "legendFormat": "p95"
+        },
+        {
+          "refId": "C",
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(linker_http_request_duration_milliseconds_bucket{service_name=\"$service_name\"}[5m])))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "JVM & process",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+      "panels": []
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "JVM heap used vs max",
+      "description": "linker_jvm_heap_used_bytes and linker_jvm_heap_max_bytes, sampled every 30s. Used trending up and staying near max without ever dropping back down (no sawtooth from GC) points at a memory leak, not a transient load spike.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 10 },
+      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "linker_jvm_heap_used_bytes{service_name=\"$service_name\"}", "legendFormat": "used" },
+        { "refId": "B", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "linker_jvm_heap_max_bytes{service_name=\"$service_name\"}", "legendFormat": "max" }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "JVM live threads",
+      "description": "linker_jvm_threads. A step change right after deploy is expected (new JVM, fresh thread pools); a steady climb over hours suggests a thread leak (e.g. a connection pool or executor not being shut down).",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 10 },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "linker_jvm_threads{service_name=\"$service_name\"}", "legendFormat": "threads" }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Process uptime",
+      "description": "linker_process_uptime_seconds. The single fastest way to confirm a deploy actually restarted the process: this should drop back near zero right after a successful deploy. If it keeps climbing across a deploy, the systemd restart didn't take effect.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 10 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "graphMode": "area", "colorMode": "value" },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "linker_process_uptime_seconds{service_name=\"$service_name\"}", "legendFormat": "uptime" }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Healthcheck (/healthz)",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 },
+      "panels": []
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "Up / Down",
+      "description": "linker_healthcheck_up -- 1 if the last /healthz check (SELECT 1 against MySQL) was healthy, 0 otherwise. This is the single number to alert on and the first thing to check during an incident: 0 means the app itself may be fine but its MySQL dependency is not reachable.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 19 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" } } },
+            { "type": "value", "options": { "1": { "text": "UP", "color": "green" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "linker_healthcheck_up{service_name=\"$service_name\"}", "legendFormat": "up" }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Healthcheck duration",
+      "description": "linker_healthcheck_duration_milliseconds (connection open + SELECT 1). A rising trend without a change in up/down status usually means MySQL itself is slow or under load, not unreachable -- worth escalating before it flips to fully down.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 9, "x": 6, "y": 19 },
+      "fieldConfig": { "defaults": { "unit": "ms", "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.95, sum by (le, outcome) (rate(linker_healthcheck_duration_milliseconds_bucket{service_name=\"$service_name\"}[5m])))",
+          "legendFormat": "p95 ({{outcome}})"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Healthcheck failures",
+      "description": "rate(linker_healthcheck_failures_total[5m]). Should be flat at zero in steady state -- any nonzero rate deserves a look even if Up/Down hasn't flipped to DOWN yet (a flapping check is an early warning).",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 9, "x": 15, "y": 19 },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "bars", "fillOpacity": 60 } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "rate(linker_healthcheck_failures_total{service_name=\"$service_name\"}[5m])", "legendFormat": "failures/s" }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Business",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 },
+      "panels": []
+    },
+    {
+      "id": 11,
+      "type": "gauge",
+      "title": "Stored links (count)",
+      "description": "linker_links_count -- current number of short links stored in SQLite. Not an alerting signal by itself, but a sudden drop to (or near) zero after a deploy is a strong signal the wrong LINKER_DB_PATH is being used or the database file was lost.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 28 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "linker_links_count{service_name=\"$service_name\"}", "legendFormat": "links" }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "DB operation duration (create / resolve)",
+      "description": "histogram_quantile over linker_db_operation_duration_milliseconds_bucket, split by the `operation` attribute (create/resolve). Separates \"the app is slow\" (this panel) from \"MySQL healthcheck is slow\" (the healthcheck duration panel above) -- they hit different datastores (SQLite vs MySQL) and a problem in one doesn't imply a problem in the other.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 16, "x": 8, "y": 28 },
+      "fieldConfig": { "defaults": { "unit": "ms", "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(linker_db_operation_duration_milliseconds_bucket{service_name=\"$service_name\"}[5m])))",
+          "legendFormat": "p95 {{operation}}"
+        }
+      ]
+    }
+  ]
+}

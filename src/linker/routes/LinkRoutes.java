@@ -1,6 +1,6 @@
 package linker.routes;
 
-import io.javalin.config.RoutesConfig;
+import io.javalin.Javalin;
 import io.javalin.http.HttpStatus;
 import linker.AliasConflictException;
 import linker.LinkService;
@@ -24,8 +24,8 @@ public final class LinkRoutes {
         this.linkSpans = linkSpans;
     }
 
-    public void register(RoutesConfig routes) {
-        routes.get("/{id}", ctx -> {
+    public void register(Javalin app) {
+        app.get("/{id}", ctx -> {
             log.trace("Received GET request on path={}", ctx.path());
             var id = ctx.pathParam("id");
             long start = System.currentTimeMillis();
@@ -52,7 +52,61 @@ public final class LinkRoutes {
             }
         });
 
-        routes.post("/link", ctx -> {
+        app.head("/{id}", ctx -> {
+            log.trace("Received HEAD request on path={}", ctx.path());
+            var id = ctx.pathParam("id");
+            long start = System.currentTimeMillis();
+            log.debug("Resolving link id={} for HEAD", id);
+
+            String url;
+            try {
+                url = linkSpans.traceResolve(id, () -> service.get(id));
+            } catch (Exception e) {
+                log.error("Failed to resolve link id={} for HEAD", id, e);
+                ctx.status(500).result("Internal error");
+                requestMetrics.recordRequest("/{id}", 500, System.currentTimeMillis() - start);
+                return;
+            }
+
+            if (url != null) {
+                log.info("Resolved link id={} for HEAD to url={}", id, url);
+                ctx.status(200).result(url);
+                requestMetrics.recordRequest("/{id}", 200, System.currentTimeMillis() - start);
+            } else {
+                log.warn("Link id={} for HEAD not found", id);
+                ctx.status(404).result("Not found");
+                requestMetrics.recordRequest("/{id}", 404, System.currentTimeMillis() - start);
+            }
+        });
+
+        app.delete("/{id}", ctx -> {
+            log.trace("Received DELETE request on path={}", ctx.path());
+            var id = ctx.pathParam("id");
+            long start = System.currentTimeMillis();
+            log.debug("Deleting link id={}", id);
+
+            boolean deleted;
+            try {
+                deleted = linkSpans.traceDelete(id, () -> service.delete(id));
+            } catch (Exception e) {
+                log.error("Failed to delete link id={}", id, e);
+                ctx.status(500).result("Internal error");
+                requestMetrics.recordRequest("/{id}", 500, System.currentTimeMillis() - start);
+                return;
+            }
+
+            if (deleted) {
+                log.info("Deleted link id={}", id);
+                ctx.status(204);
+                requestMetrics.recordRequest("/{id}", 204, System.currentTimeMillis() - start);
+            } else {
+                log.warn("Link id={} not found for deletion", id);
+                ctx.status(404).result("Not found");
+                requestMetrics.recordRequest("/{id}", 404, System.currentTimeMillis() - start);
+            }
+        });
+
+        app.post("/link", ctx -> {
             log.trace("Received POST request on path={}", ctx.path());
             long start = System.currentTimeMillis();
             var url = ctx.formParam("url");

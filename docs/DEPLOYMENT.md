@@ -1,6 +1,100 @@
 # Continuous Deployment Strategy
 
-## Context
+## Blue/Green Deployment (current)
+
+New versions of linker1 are now deployed as a **green VM** alongside the running **blue VM** using the shared OCI Load Balancer.  Nothing on the blue VM is touched until green is fully healthy and promoted.
+
+### Workflow: `.github/workflows/bluegreen.yml`
+
+Triggered on every push to `main` and via `workflow_dispatch`.
+
+```
+push to main
+    │
+    ▼
+[build]  ── fail fast: broken build never provisions a VM
+    │
+    ▼
+[provision-green]
+    terraform apply (infra/main.tf)
+    instance_display_name = vm-linker1-green-<run_id>
+    uploads terraform.tfstate as artifact for failure cleanup
+    │
+    ▼
+[blue-green-lb-deploy]  (calls oci-lb-bluegreen-ab.yml@main)
+    preflight: validate /healthz is the configured health-check path
+    stage_green_backend: add green VM to LB with drain=true
+    verify_green_health: poll OCI LB until green reports OK  (≤ 20 min)
+    start_ab_test: 90% blue / 10% green
+    observe_ab_test: 60 s observation window
+    verify_ab_health: confirm both backends still OK
+    promote_green: 100% green / 0% blue (drained)
+    ──── on any failure: rollback-to-current + remove-new-backend (LB side) ────
+    │
+    ├── success ──▶ [teardown-blue-on-success]
+    │                 oci compute instance terminate <blue-ocid>
+    │                 gh variable set OCI_INSTANCE_OCID = <green-ocid>
+    │
+    └── failure ──▶ [teardown-green-on-failure]
+                      terraform destroy (using saved state artifact)
+                      Blue VM untouched, OCI_INSTANCE_OCID unchanged
+```
+
+### Required secrets and variables — Blue/Green
+
+The OCI CLI secrets (`OCI_CLI_USER`, `OCI_CLI_TENANCY`, `OCI_CLI_FINGERPRINT`, `OCI_CLI_KEY_CONTENT`, `OCI_CLI_REGION`) and application secrets (`LD_SDK_KEY`, `MYSQL_*`, `OTEL_*`, `DEPLOYMENT_PUBLIC_KEY`) are shared with the legacy pipeline and do not need to be re-added.
+
+The following are **new** and must be added before the first run:
+
+| Name | Type | Level | Use |
+| --- | --- | --- | --- |
+| `OCI_LB_OCID` | variable | repo | OCID of the shared OCI Load Balancer (`OCI_LB_OCID` from `infra/linker.env`) |
+| `OCI_LB_LINKER_BACKEND` | variable | repo | Backend set name (`linker-1` — `OCI_LB_LINKER_BACKEND` from `infra/linker.env`) |
+| `TF_COMPARTMENT_ID` | variable | repo | OCI compartment OCID for the new VM |
+| `TF_SUBNET_ID` | variable | repo | Subnet OCID (`OCI_LINKER_SUBNET_OCID` from `infra/linker.env`) |
+| `TF_IMAGE_ID` | variable | repo | OCI image OCID used to create the VM |
+| `OCI_INSTANCE_OCID` | variable | repo | OCID of the current blue VM (updated automatically after each successful deploy; must be set manually for the very first run) |
+
+One-time setup commands (run from OCI Cloud Shell or locally with the OCI CLI configured):
+
+```bash
+gh variable set OCI_LB_OCID           --body "ocid1.loadbalancer.oc1.sa-bogota-1...."
+gh variable set OCI_LB_LINKER_BACKEND --body "linker-1"
+gh variable set TF_COMPARTMENT_ID     --body "ocid1.compartment.oc1..xxxxxxxx"
+gh variable set TF_SUBNET_ID          --body "ocid1.subnet.oc1.sa-bogota-1.xxxxxxxx"
+gh variable set TF_IMAGE_ID           --body "ocid1.image.oc1.sa-bogota-1.xxxxxxxx"
+gh variable set OCI_INSTANCE_OCID     --body "<current-blue-vm-ocid>"
+```
+
+`DEPLOYMENT_PUBLIC_KEY` (already a repo secret) is reused as the SSH key for the new VM.
+
+### Health check
+
+`/healthz` is the real health endpoint (runs `SELECT 1` against MySQL).  It is passed to the reusable workflow as `health-check-path: /healthz`.  The OCI LB must be configured with `/healthz` as its health-check URL path; the `preflight` job validates this before doing anything else.  See [`HEALTHCHECK.md`](HEALTHCHECK.md) for endpoint details.
+
+### Failure paths
+
+| Failure point | LB side (reusable workflow) | VM side (this workflow) |
+| --- | --- | --- |
+| Green health check fails | `remove-new-backend` | `teardown-green-on-failure`: `terraform destroy` |
+| A/B health check fails | `rollback-to-current` + `remove-new-backend` | `teardown-green-on-failure`: `terraform destroy` |
+| Promotion fails | `rollback-to-current` | `teardown-green-on-failure`: `terraform destroy` |
+
+In all failure cases: blue VM keeps 100% traffic, `OCI_INSTANCE_OCID` is unchanged, and the green VM is destroyed.
+
+### Notes
+
+- **Green VM builds from source**: `infra/cloud-init.yaml` runs `git clone + mvn clean package` on first boot.  It clones the repo's default branch HEAD, not the exact triggering commit.  The `build` job at the start of the workflow acts as a compile gate, but the compiled jar in CI is not transferred to the VM.
+- **`pipeline.yml` `deploy-prod` job**: references deleted VMs and will fail.  It is superseded by this workflow and should be removed as a follow-up.
+- **`variables: write`**: the `teardown-blue-on-success` job uses `GITHUB_TOKEN` with `permissions: actions: write` to call `gh variable set`.  If this fails due to org policy, create a PAT with `repo` scope, store it as `secrets.GH_PAT`, and replace `secrets.GITHUB_TOKEN` in that step.
+
+---
+
+## Legacy — Single-VM Deployment (superseded)
+
+The documentation below describes the old `pipeline.yml`-based single-VM deployment through an OCI Bastion.  The VMs it targeted have been deleted.  It is retained for historical context.
+
+### Context (legacy)
 
 Linker1 runs on a single OCI VM (production, `https://1.n-la-c.app`) created with the IaC in `infra/` (`assign_public_ip = false`: the instance has no public IP). Before this change, `.github/workflows/pipeline.yml` didn't deploy anything real: the `deploy-dev`, `validate-dev`, and `deploy-prod` jobs were placeholders that only did `echo`, and the one real job (`rollback`) assumed direct SSH to a public `VM_HOST` that never existed or was configured.
 
@@ -19,6 +113,7 @@ Triggers on every `push` to `main` (and manually via `workflow_dispatch`):
    - copies the jar to `/opt/linker1/linker1.jar`
    - rewrites the `systemd` unit (`linker1.service`), now including `Environment="LD_SDK_KEY=..."` (previously missing: `Main.java` calls `System.exit(1)` if that variable isn't present)
    - restarts the service and verifies `systemctl is-active` + `curl localhost:8080` → `200`
+   - then, back on the runner (not the VM), runs `scripts/check-grafana-metrics.sh` to confirm the instance is actually emitting telemetry into Grafana Cloud post-deploy — see [Optional: post-deploy Grafana telemetry check](#optional-post-deploy-grafana-telemetry-check) below and [`MONITORING.md`](MONITORING.md). This is why the job now also has a `Checkout repository` step: the earlier jobs didn't need the repo checked out on the runner itself, only this script does.
 3. **`validate-prod`**: read-only checks against `https://1.n-la-c.app` (`/`, `/app.js`, `/styles.css`, 404 on a nonexistent route). It doesn't repeat the mutating tests (create link, alias, conflict) because those are already covered by `ci.yml`'s `api-tests` job (Newman) against the same production instance; running them again on every deploy would just pollute the real database.
 4. **`rollback`**: triggers if `deploy-prod` or `validate-prod` fail. Resolves the previous SemVer tag (same as before) and now uses the same `oci-bastion-deploy` action (instead of raw SSH) to run `bash scripts/rollback.sh <tag>` on the checkout that already exists on the VM.
 
@@ -51,19 +146,31 @@ There is also an `OCI_VM_SSHKEY_CONTENT` secret in the repo that isn't used by t
 
 ### Optional: OTLP export and MySQL healthcheck
 
-`deploy-prod` also sets these, but **not yet configured in the repo** (verified via `gh secret list` / `gh variable list` / `gh secret list --env prod` / `gh variable list --env prod` — none exist as of this writing). Until they're added, `add_env_if_set` in the job's script simply omits each corresponding `Environment=` line, so the app starts fine with OTLP export disabled and `/healthz` reporting `503` (see [`HEALTHCHECK.md`](HEALTHCHECK.md)):
+`deploy-prod` also sets these. **Update (2026-07-12): all of them are now configured** as repo-level secrets/variables (verified directly in Settings > Secrets and variables > Actions) — this section previously said none existed, which is now stale:
 
 | Name | Type | Level | Use |
 | --- | --- | --- | --- |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | variable | repo or `prod` env | Grafana Cloud OTLP gateway URL — see [`INSTRUMENTATION.md`](INSTRUMENTATION.md#otlp-export-configuration) |
-| `OTEL_EXPORTER_OTLP_HEADERS` | secret | repo or `prod` env | `Authorization=Basic <token>` for the OTLP gateway; token comes from the OCI Vault at `https://cloud.oracle.com/security/secrets?region=sa-bogota-1` |
-| `MYSQL_HOST` | variable | repo or `prod` env | MySQL host for `/healthz`'s `SELECT 1` check |
-| `MYSQL_DATABASE` | variable | repo or `prod` env | MySQL database name (`linker_db_<group-number>`) |
-| `MYSQL_USER` | variable | repo or `prod` env | MySQL user (`linker_user_<group-number>`) |
-| `MYSQL_PWD` | secret | repo or `prod` env | MySQL password; also comes from the OCI Vault above |
-| `LOG_LEVEL` | variable | repo or `prod` env | Defaults to `INFO` in the pipeline if unset |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | variable | repo | Grafana Cloud OTLP gateway URL — see [`INSTRUMENTATION.md`](INSTRUMENTATION.md#otlp-export-configuration) |
+| `OTEL_EXPORTER_OTLP_HEADERS` | secret | repo | `Authorization=Basic <token>` for the OTLP gateway |
+| `MYSQL_HOST` | variable | repo | MySQL host for `/healthz`'s `SELECT 1` check |
+| `MYSQL_DATABASE` | variable | repo | MySQL database name |
+| `MYSQL_USER` | variable | repo | MySQL user |
+| `MYSQL_PWD` | secret | repo | MySQL password |
+| `LOG_LEVEL` | variable | repo or `prod` env | Optional, defaults to `INFO` in the pipeline if unset |
 
-These need to be added with `gh secret set <NAME>` / `gh variable set <NAME>` (or via Settings > Secrets and variables > Actions) — since they're pulled from OCI Vault and the course's Grafana Cloud stack, only someone with access to those consoles can supply the real values.
+**Known risk with `OTEL_EXPORTER_OTLP_HEADERS`**: the instructor's course material hands out this variable as a literal template, `Authorization=Basic%<ponga_su_token>` (placeholder text, malformed `%` instead of a space, unclosed angle bracket) — if that string was ever pasted as-is into the secret instead of being replaced with a real `Authorization=Basic <base64-encoded-instance-id:api-token>` value, OTLP export fails authentication silently (same "looks healthy, exports nothing" failure mode documented in [`INSTRUMENTATION.md`](INSTRUMENTATION.md#otlp-export-configuration)) — `/healthz` and `/` keep returning `200` throughout, so this doesn't show up as a deploy failure, only as an empty Grafana dashboard. See [`MONITORING.md`](MONITORING.md#troubleshooting-dashboard-shows-no-data-on-every-panel) for how this was diagnosed and how to regenerate the secret with a real token.
+
+### Optional: post-deploy Grafana telemetry check
+
+`deploy-prod` also runs `scripts/check-grafana-metrics.sh` after the local `/healthz` check, to confirm the deployed instance is actually emitting metrics into Grafana Cloud (not just that `/healthz` answers locally on the VM). Same situation as above — **not yet configured in the repo**, so the step currently prints a warning and skips rather than failing the deploy:
+
+| Name | Type | Level | Use |
+| --- | --- | --- | --- |
+| `GRAFANA_PROM_QUERY_URL` | variable | repo or `prod` env | Grafana Cloud Prometheus/Mimir query endpoint |
+| `GRAFANA_PROM_USER` | variable | repo or `prod` env | Grafana Cloud Prometheus instance ID |
+| `GRAFANA_CLOUD_API_KEY` | secret | repo or `prod` env | Grafana Cloud API key/token, `metrics:read` scope |
+
+See [`MONITORING.md`](MONITORING.md#post-deploy-automated-check-bonus) for where to find these values and how the check behaves once configured.
 
 ## Open risks / things to verify
 
@@ -73,6 +180,7 @@ These need to be added with `gh secret set <NAME>` / `gh variable set <NAME>` (o
 
 ## Related documents
 
+- [Monitoring (Grafana)](MONITORING.md) — dashboard, panel guide, and the post-deploy telemetry check
 - [Rollback Strategy](ROLLBACK_STRATEGY.md)
 - [`.github/workflows/pipeline.yml`](../.github/workflows/pipeline.yml)
 - [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)

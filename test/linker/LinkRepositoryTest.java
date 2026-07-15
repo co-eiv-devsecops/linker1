@@ -94,4 +94,25 @@ class LinkRepositoryTest {
 
         assertEquals(2, repo.countLinks());
     }
+
+    @Test
+    void deleteRemovesRowAndReturnsTrueWhenIdExists() throws SQLException {
+        var id = repo.insertShortUrl("https://example.com");
+        assertEquals(1, repo.countLinks());
+
+        assertTrue(repo.delete(id));
+        assertEquals(0, repo.countLinks());
+        assertNull(repo.findUrlById(id));
+    }
+
+    @Test
+    void deleteReturnsFalseWhenIdDoesNotExist() throws SQLException {
+        assertFalse(repo.delete("doesnotexist"));
+    }
+
+    @Test
+    void deleteThrowsExceptionWhenConnectionClosed() throws SQLException {
+        conn.close();
+        assertThrows(SQLException.class, () -> repo.delete("id"));
+    }
 }

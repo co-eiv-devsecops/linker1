@@ -54,4 +54,11 @@ public class LinkRepository {
             return rs.getLong("total");
         }
     }
+
+    public boolean delete(String id) throws SQLException {
+        try (var ps = conn.prepareStatement("DELETE FROM shorturl WHERE id = ?")) {
+            ps.setString(1, id);
+            return ps.executeUpdate() > 0;
+        }
+    }
 }
