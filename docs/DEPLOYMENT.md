@@ -88,7 +88,14 @@ In all failure cases: blue VM keeps 100% traffic, `OCI_INSTANCE_OCID` is unchang
 
 - **Green VM builds from source**: `infra/cloud-init.yaml` runs `git clone + mvn clean package` on first boot.  It clones the repo's default branch HEAD, not the exact triggering commit.  The `build` job at the start of the workflow acts as a compile gate, but the compiled jar in CI is not transferred to the VM.
 - **`pipeline.yml` `deploy-prod` job**: superseded by this workflow. It reads `vars.OCI_INSTANCE_OCID` dynamically (kept up to date by `bluegreen.yml`'s `teardown-blue-on-success` step), so it doesn't hardcode a specific VM and won't outright fail just because a VM was recreated — but it deploys straight to the "current" instance with no green/health-check/rollback safety, bypassing the whole point of this workflow. Should be removed as a follow-up once `bluegreen.yml` is confirmed working end to end.
-- **`variables: write`**: the `teardown-blue-on-success` job uses `GITHUB_TOKEN` with `permissions: actions: write` to call `gh variable set`.  If this fails due to org policy, create a PAT with `repo` scope, store it as `secrets.GH_PAT`, and replace `secrets.GITHUB_TOKEN` in that step.
+- **`variables: write` is blocked by org policy, confirmed**: both `bootstrap-blue.yml`'s and `bluegreen.yml`'s `teardown-blue-on-success` job declare `permissions: actions: write` so `GITHUB_TOKEN` can call `gh variable set OCI_INSTANCE_OCID`. This fails with `HTTP 403: Resource not accessible by integration` regardless of that declaration, because the org has "Write permissions for workflows" disabled repo-wide (`gh api repos/co-eiv-devsecops/linker1/actions/permissions/workflow` shows `"default_workflow_permissions":"read"`, and attempting to raise it via the API returns `409 Conflict: Write permissions for workflows are disabled by the organization`). A workflow's own `permissions:` block can only *narrow* the org-enforced ceiling, never raise it — this needs an org admin to change the org-level policy, which nobody on the team currently has access to.
+  **Until then, after every successful bootstrap or blue/green promotion, manually run:**
+
+  ```bash
+  gh variable set OCI_INSTANCE_OCID --body "<the-new-blue-VM-OCID>"
+  ```
+
+  (The workflow logs the OCID it tried to set right before the 403, in the `BLUE_OCID`/`green-instance-id` output — copy it from there.) The proper fix, if an org admin becomes available, is either flipping the org policy or creating a PAT with `repo` scope stored as `secrets.GH_PAT` and swapping it in for `secrets.GITHUB_TOKEN` in that one step (a PAT's permissions aren't subject to this same org-level workflow-token ceiling).
 
 ---
 
