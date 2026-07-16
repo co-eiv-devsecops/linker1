@@ -1,0 +1,286 @@
+name: OCI Bastion deploy artifact
+description: Download a GitHub artifact, copy it to an OCI Compute instance through an OCI Bastion managed SSH session, run a script, and delete the session.
+
+inputs:
+  instance-id:
+    description: OCID of the target OCI Compute instance.
+    required: true
+  script:
+    description: Bash script to run on the target instance after the artifact is copied. The script runs from target-path and has DEPLOY_PATH set.
+    required: true
+  artifact-name:
+    description: Name of the GitHub Actions artifact to download from the current workflow run.
+    required: true
+  target-path:
+    description: Absolute path on the OCI Compute instance where artifact contents will be copied.
+    required: true
+  target-os-username:
+    description: OS username for the target instance.
+    required: false
+    default: opc
+  target-port:
+    description: SSH port on the target instance.
+    required: false
+    default: '22'
+  session-ttl:
+    description: Bastion session TTL in seconds. Use 1800 to 10800 seconds unless your tenancy policy says otherwise.
+    required: false
+    default: '1800'
+  enable-oci-cli-cache:
+    description: Restore and save the OCI CLI installation created by oracle-actions/run-oci-cli-command.
+    required: false
+    default: 'true'
+  oci-cli-cache-version:
+    description: Cache namespace/version for the OCI CLI install. Change this value to force a fresh OCI CLI install and cache.
+    required: false
+    default: v1
+
+outputs:
+  session-id:
+    description: OCID of the Bastion session created by this action.
+    value: ${{ steps.ssh.outputs.session-id }}
+  oci-cli-cache-hit:
+    description: Whether the OCI CLI install cache was restored with an exact key match.
+    value: ${{ steps.oci-cli-cache.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - name: Configure OCI CLI cache environment
+      id: oci-cli-cache-
+      if: false
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        cache_root="${HOME}/.oci-cli-cache"
+        python_user_base="${cache_root}/python-userbase"
+        mkdir -p "$python_user_base"
+
+        {
+          echo "PYTHONUSERBASE=$python_user_base"
+          echo "PIP_USER=1"
+          echo "PIP_IGNORE_INSTALLED=1"
+          echo "PIP_DISABLE_PIP_VERSION_CHECK=1"
+        } >> "$GITHUB_ENV"
+
+        echo "${python_user_base}/bin" >> "$GITHUB_PATH"
+        echo "cache-root=$cache_root" >> "$GITHUB_OUTPUT"
+        echo "python-user-base=$python_user_base" >> "$GITHUB_OUTPUT"
+
+    - name: Restore OCI CLI cache
+      id: oci-cli-cache
+      # if: ${{ inputs.enable-oci-cli-cache == 'true' }}
+      if: false
+      uses: actions/cache/restore@v5
+      with:
+        path: |
+          ~/.oci-cli-cache/python-userbase
+          ~/.cache/pip
+          ~/.oci-cli-installed
+        key: oci-cli-${{ runner.os }}-${{ runner.arch }}-${{ inputs.oci-cli-cache-version }}
+
+    - name: Prime OCI CLI through Oracle action
+      id: prime-oci-cli
+      # if: ${{ inputs.enable-oci-cli-cache == 'true' && steps.oci-cli-cache.outputs.cache-hit != 'true' }}
+      uses: oracle-actions/run-oci-cli-command@v1.3.2
+      with:
+        command: '--version'
+        silent: 'true'
+
+    - name: Save OCI CLI cache
+      # if: ${{ inputs.enable-oci-cli-cache == 'true' && steps.oci-cli-cache.outputs.cache-hit != 'true' }}
+      if: false
+      uses: actions/cache/save@v5
+      continue-on-error: true
+      with:
+        path: |
+          ~/.oci-cli-cache/python-userbase
+          ~/.cache/pip
+          ~/.oci-cli-installed
+        key: ${{ steps.oci-cli-cache.outputs.cache-primary-key }}
+
+    - name: Preflight and materialize inputs
+      id: preflight
+      shell: bash
+      env:
+        DEPLOYMENT_PUBLIC_KEY_VALUE: ${{ env.DEPLOYMENT_PUBLIC_KEY }}
+        DEPLOYMENT_PRIVATE_KEY_VALUE: ${{ env.DEPLOYMENT_PRIVATE_KEY }}
+        OCI_BASTION_OCID_VALUE: ${{ env.OCI_BASTION_OCID }}
+        REMOTE_SCRIPT: ${{ inputs.script }}
+        TARGET_PATH: ${{ inputs.target-path }}
+        SESSION_TTL: ${{ inputs.session-ttl }}
+        TARGET_PORT: ${{ inputs.target-port }}
+      run: |
+        set -euo pipefail
+
+        if [[ -z "${DEPLOYMENT_PRIVATE_KEY_VALUE:-}" ]]; then
+          echo "::error::DEPLOYMENT_PRIVATE_KEY must be provided as a secret or environment variable containing the private key matching DEPLOYMENT_PUBLIC_KEY."
+          exit 1
+        fi
+
+        if [[ -z "${DEPLOYMENT_PUBLIC_KEY_VALUE:-}" ]]; then
+          echo "::error::DEPLOYMENT_PUBLIC_KEY must be provided as a repository or organization variable containing the OpenSSH public key."
+          exit 1
+        fi
+
+        if [[ -z "${OCI_BASTION_OCID_VALUE:-}" ]]; then
+          echo "::error::OCI_BASTION_OCID must be provided as a repository or organization variable containing the Bastion OCID."
+          exit 1
+        fi
+
+        if [[ "$TARGET_PATH" != /* ]]; then
+          echo "::error::target-path must be an absolute Linux path, for example /opt/myapp."
+          exit 1
+        fi
+
+        if [[ "$TARGET_PATH" == *$'\n'* || "$TARGET_PATH" == *$'\r'* ]]; then
+          echo "::error::target-path must not contain newlines."
+          exit 1
+        fi
+
+        if ! [[ "$SESSION_TTL" =~ ^[0-9]+$ ]]; then
+          echo "::error::session-ttl must be an integer number of seconds."
+          exit 1
+        fi
+
+        if ! [[ "$TARGET_PORT" =~ ^[0-9]+$ ]]; then
+          echo "::error::target-port must be an integer."
+          exit 1
+        fi
+
+        if command -v oci >/dev/null 2>&1; then
+          echo "oci-cli-found=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "oci-cli-found=false" >> "$GITHUB_OUTPUT"
+        fi
+
+        work_dir="$(mktemp -d "${RUNNER_TEMP}/oci-bastion.XXXXXX")"
+        artifact_dir="$work_dir/artifact"
+        mkdir -p "$artifact_dir"
+        chmod 700 "$work_dir"
+
+        public_key_file="$work_dir/session.pub"
+        private_key_file="$work_dir/session.key"
+        remote_script_file="$work_dir/remote-script.sh"
+
+        printf '%s\n' "$DEPLOYMENT_PUBLIC_KEY_VALUE" > "$public_key_file"
+        printf '%s\n' "$DEPLOYMENT_PRIVATE_KEY_VALUE" > "$private_key_file"
+        printf '%s\n' "$REMOTE_SCRIPT" > "$remote_script_file"
+        chmod 600 "$private_key_file"
+
+        echo "work-dir=$work_dir" >> "$GITHUB_OUTPUT"
+        echo "artifact-dir=$artifact_dir" >> "$GITHUB_OUTPUT"
+        echo "public-key-file=$public_key_file" >> "$GITHUB_OUTPUT"
+        echo "private-key-file=$private_key_file" >> "$GITHUB_OUTPUT"
+        echo "remote-script-file=$remote_script_file" >> "$GITHUB_OUTPUT"
+        echo "bastion-id=$OCI_BASTION_OCID_VALUE" >> "$GITHUB_OUTPUT"
+
+    - name: Download artifact
+      uses: actions/download-artifact@v8
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ steps.preflight.outputs.artifact-dir }}
+
+    - name: Create managed SSH Bastion session
+      id: create-session
+      uses: oracle-actions/run-oci-cli-command@v1.3.2
+      with:
+        command: >-
+          bastion session create-managed-ssh
+          --bastion-id "${{ steps.preflight.outputs.bastion-id }}"
+          --ssh-public-key-file "${{ steps.preflight.outputs.public-key-file }}"
+          --target-resource-id "${{ inputs.instance-id }}"
+          --target-os-username "${{ inputs.target-os-username }}"
+          --target-port "${{ inputs.target-port }}"
+          --key-type PUB
+          --session-ttl "${{ inputs.session-ttl }}"
+          --wait-for-state SUCCEEDED
+          --wait-interval-seconds 10
+          --raw-output
+        query: 'data.resources[?\"entity-type\"==''SessionResource'' && \"action-type\"==''CREATED''].identifier | [0]'
+        silent: false
+    - name: Wait for active Bastion session
+      id: wait-session
+      shell: bash
+      env:
+        SESSION_ID: ${{ steps.create-session.outputs.raw_output }}
+        WORK_DIR: ${{ steps.preflight.outputs.work-dir }}
+      run: |
+        set -euo pipefail
+        session_id="$(printf '%s' "$SESSION_ID" | tr -d '\r\n\"')"
+        if [[ -z "$session_id" || "$session_id" == "null" ]]; then
+          echo "::error::Could not determine Bastion session OCID from create-managed-ssh output."
+          exit 1
+        fi
+
+        ssh_command_file="$WORK_DIR/oci-ssh-command.txt"
+        oci bastion session get \
+          --session-id "$session_id" \
+          --query 'data."ssh-metadata".command' \
+          --raw-output > "$ssh_command_file"
+        chmod 600 "$ssh_command_file"
+
+        echo "session-id=$session_id" >> "$GITHUB_OUTPUT"
+        echo "ssh-command-file=$ssh_command_file" >> "$GITHUB_OUTPUT"
+    - name: Write SSH config with github-script
+      id: ssh
+      uses: actions/github-script@v9
+      env:
+        SESSION_ID: ${{ steps.wait-session.outputs.session-id }}
+        SSH_COMMAND_FILE: ${{ steps.wait-session.outputs.ssh-command-file }}
+        PRIVATE_KEY_FILE: ${{ steps.preflight.outputs.private-key-file }}
+        WORK_DIR: ${{ steps.preflight.outputs.work-dir }}
+        SSH_CONFIG_SCRIPT: ${{ github.action_path }}/scripts/write-ssh-config.js
+      with:
+        script: |
+          const writeSshConfig = require(process.env.SSH_CONFIG_SCRIPT);
+          await writeSshConfig({ core });
+
+    - name: Copy artifact to target path through Bastion
+      shell: bash
+      env:
+        ARTIFACT_DIR: ${{ steps.preflight.outputs.artifact-dir }}
+        TARGET_PATH: ${{ inputs.target-path }}
+        SSH_CONFIG: ${{ steps.ssh.outputs.ssh-config }}
+      run: |
+        set -euo pipefail
+
+        remote_quote() {
+          printf "'"
+          printf '%s' "$1" | sed "s/'/'\\''/g"
+          printf "'"
+        }
+
+        target_q="$(remote_quote "$TARGET_PATH")"
+        ssh -F "$SSH_CONFIG" oci-bastion-target "sudo mkdir -p -- $target_q"
+        tar -C "$ARTIFACT_DIR" -cf - . | ssh -F "$SSH_CONFIG" oci-bastion-target "sudo tar -C $target_q -xf -"
+
+    - name: Run remote script through Bastion
+      shell: bash
+      env:
+        REMOTE_SCRIPT_FILE: ${{ steps.preflight.outputs.remote-script-file }}
+        TARGET_PATH: ${{ inputs.target-path }}
+        SSH_CONFIG: ${{ steps.ssh.outputs.ssh-config }}
+      run: |
+        set -euo pipefail
+
+        remote_quote() {
+          printf "'"
+          printf '%s' "$1" | sed "s/'/'\\''/g"
+          printf "'"
+        }
+
+        target_q="$(remote_quote "$TARGET_PATH")"
+        ssh -F "$SSH_CONFIG" oci-bastion-target "cd -- $target_q && DEPLOY_PATH=$target_q bash -s" < "$REMOTE_SCRIPT_FILE"
+
+    - name: Delete Bastion session
+      if: ${{ always() && steps.create-session.outputs.raw_output != '' }}
+      uses: oracle-actions/run-oci-cli-command@v1.3.2
+      with:
+        command: >-
+          bastion session delete
+          --session-id "${{ steps.wait-session.outputs.session-id }}"
+          --force
+         # --wait-for-state SUCCEEDED
+        silent: 'false'

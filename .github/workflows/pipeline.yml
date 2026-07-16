@@ -70,7 +70,11 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Deploy via OCI Bastion
-        uses: co-eiv-devsecops/material-curso/actions/oci-bastion-deploy@main
+        # Vendored locally (actions/oci-bastion-deploy) instead of
+        # `uses: co-eiv-devsecops/material-curso/...@main` -- the org restricted
+        # cross-repo Actions access to material-curso sometime after 2026-07-11,
+        # which broke every workflow depending on it ("Unable to resolve action").
+        uses: ./actions/oci-bastion-deploy
         with:
           instance-id: ${{ vars.OCI_INSTANCE_OCID }}
           artifact-name: linker-app
@@ -287,7 +291,11 @@ jobs:
           path: rollback-artifact/linker1-1.0-jar-with-dependencies.jar
 
       - name: Rollback via OCI Bastion
-        uses: co-eiv-devsecops/material-curso/actions/oci-bastion-deploy@main
+        # Vendored locally (actions/oci-bastion-deploy) instead of
+        # `uses: co-eiv-devsecops/material-curso/...@main` -- the org restricted
+        # cross-repo Actions access to material-curso sometime after 2026-07-11,
+        # which broke every workflow depending on it ("Unable to resolve action").
+        uses: ./actions/oci-bastion-deploy
         with:
           instance-id: ${{ vars.OCI_INSTANCE_OCID }}
           artifact-name: linker-app-rollback
