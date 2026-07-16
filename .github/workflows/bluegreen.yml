@@ -139,7 +139,12 @@ jobs:
   blue-green-lb-deploy:
     name: Blue/green LB deploy
     needs: provision-green
-    uses: co-eiv-devsecops/material-curso/.github/workflows/oci-lb-bluegreen-ab.yml@main
+    # Vendored locally (.github/workflows/oci-lb-bluegreen-ab.yml) instead of
+    # `uses: co-eiv-devsecops/material-curso/...@main` -- the org restricted
+    # cross-repo Actions access to material-curso sometime after 2026-07-11,
+    # which broke every workflow depending on it ("Unable to resolve action").
+    # See docs/DEPLOYMENT.md for details.
+    uses: ./.github/workflows/oci-lb-bluegreen-ab.yml
     with:
       deployment-scenario: deploy
       load-balancer-id:    ${{ vars.OCI_LB_OCID }}

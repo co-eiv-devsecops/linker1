@@ -1,0 +1,567 @@
+name: OCI Load Balancer Blue/Green A/B Deployment
+
+on:
+  workflow_call:
+    inputs:
+      deployment-scenario:
+        description: "Deployment path to execute. Supported values: deploy, promote, rollback, cleanup, status."
+        required: false
+        type: string
+        default: deploy
+      load-balancer-id:
+        description: OCID of the OCI Load Balancer.
+        required: true
+        type: string
+      backend-set-name:
+        description: Name of the backend set in the OCI Load Balancer.
+        required: true
+        type: string
+      new-instance-id:
+        description: OCID of the VM that contains the new application version.
+        required: true
+        type: string
+      current-instance-id:
+        description: OCID of the VM that contains the current application version.
+        required: true
+        type: string
+      backend-port:
+        description: Application port registered in the load balancer backend set.
+        required: false
+        type: string
+        default: '80'
+      health-check-path:
+        description: Expected HTTP health-check path configured on the backend set.
+        required: false
+        type: string
+        default: '/health'
+      health-wait-attempts:
+        description: Number of times to poll OCI backend health.
+        required: false
+        type: string
+        default: '20'
+      health-wait-seconds:
+        description: Seconds to wait between backend health polling attempts.
+        required: false
+        type: string
+        default: '15'
+      ab-new-weight:
+        description: Weight assigned to the new backend during A/B testing.
+        required: false
+        type: string
+        default: '10'
+      ab-current-weight:
+        description: Weight assigned to the current backend during A/B testing.
+        required: false
+        type: string
+        default: '90'
+      promote-new-weight:
+        description: Weight assigned to the new backend after promotion.
+        required: false
+        type: string
+        default: '100'
+      current-full-weight:
+        description: Weight assigned to the current backend during rollback.
+        required: false
+        type: string
+        default: '100'
+      auto-promote:
+        description: If true, promote the new backend after the A/B observation window. If false, leave A/B traffic split in place.
+        required: false
+        type: boolean
+        default: false
+      ab-observation-seconds:
+        description: Seconds to wait after enabling A/B traffic before final health validation.
+        required: false
+        type: string
+        default: '0'
+      remove-new-on-rollback:
+        description: If true, remove the new backend after rollback jobs.
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
+  OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+  OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+  OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+  OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION || vars.OCI_CLI_REGION }}
+
+jobs:
+  validate_request:
+    name: Validate request
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate scenario and observation window
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ inputs.deployment-scenario }}" in
+            deploy|promote|rollback|cleanup|status) ;;
+            *)
+              echo "Unsupported deployment-scenario: ${{ inputs.deployment-scenario }}" >&2
+              exit 1
+              ;;
+          esac
+
+          case "${{ inputs.ab-observation-seconds }}" in
+            ''|*[!0-9]*) echo "ab-observation-seconds must be numeric." >&2; exit 1 ;;
+          esac
+
+  preflight:
+    name: Preflight health-check policy
+    if: ${{ inputs.deployment-scenario == 'deploy' }}
+    needs: validate_request
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out common action repository
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .github-action-library
+          persist-credentials: false
+
+      - name: Validate OCI LB health-check path
+        uses: ./.github-action-library/actions/oci-lb-bluegreen
+        with:
+          action: validate-health-check-path
+          load-balancer-id: ${{ inputs.load-balancer-id }}
+          backend-set-name: ${{ inputs.backend-set-name }}
+          new-instance-id: ${{ inputs.new-instance-id }}
+          current-instance-id: ${{ inputs.current-instance-id }}
+          backend-port: ${{ inputs.backend-port }}
+          health-check-path: ${{ inputs.health-check-path }}
+
+  stage_green_backend:
+    name: Stage green backend without traffic
+    if: ${{ inputs.deployment-scenario == 'deploy' }}
+    needs: preflight
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out common action repository
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .github-action-library
+          persist-credentials: false
+
+      - name: Add new VM as drained backend
+        uses: ./.github-action-library/actions/oci-lb-bluegreen
+        with:
+          action: add-new-backend-no-traffic
+          load-balancer-id: ${{ inputs.load-balancer-id }}
+          backend-set-name: ${{ inputs.backend-set-name }}
+          new-instance-id: ${{ inputs.new-instance-id }}
+          current-instance-id: ${{ inputs.current-instance-id }}
+          backend-port: ${{ inputs.backend-port }}
+
+  verify_green_health:
+    name: Verify green backend health before traffic
+    if: ${{ inputs.deployment-scenario == 'deploy' }}
+    needs: stage_green_backend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out common action repository
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .github-action-library
+          persist-credentials: false
+
+      - name: Wait for new backend to become healthy
+        uses: ./.github-action-library/actions/oci-lb-bluegreen
+        with:
+          action: wait-new-backend-healthy
+          load-balancer-id: ${{ inputs.load-balancer-id }}
+          backend-set-name: ${{ inputs.backend-set-name }}
+          new-instance-id: ${{ inputs.new-instance-id }}
+          current-instance-id: ${{ inputs.current-instance-id }}
+          backend-port: ${{ inputs.backend-port }}
+          health-wait-attempts: ${{ inputs.health-wait-attempts }}
+          health-wait-seconds: ${{ inputs.health-wait-seconds }}
+
+  cleanup_after_green_health_failure:
+    name: Cleanup if green health check fails
+    if: ${{ always() && inputs.deployment-scenario == 'deploy' && needs.stage_green_backend.result == 'success' && needs.verify_green_health.result == 'failure' }}
+    needs:
+      - stage_green_backend
+      - verify_green_health
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out common action repository
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .github-action-library
+          persist-credentials: false
+
+      - name: Remove unhealthy green backend
+        uses: ./.github-action-library/actions/oci-lb-bluegreen
+        with:
+          action: remove-new-backend
+          load-balancer-id: ${{ inputs.load-balancer-id }}
+          backend-set-name: ${{ inputs.backend-set-name }}
+          new-instance-id: ${{ inputs.new-instance-id }}
+          current-instance-id: ${{ inputs.current-instance-id }}
+          backend-port: ${{ inputs.backend-port }}
+
+  start_ab_test:
+    name: Start A/B traffic split
+    if: ${{ inputs.deployment-scenario == 'deploy' }}
+    needs: verify_green_health
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out common action repository
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .github-action-library
+          persist-credentials: false
+
+      - name: Enable weighted traffic to both backends
+        uses: ./.github-action-library/actions/oci-lb-bluegreen
+        with:
+          action: start-ab-test
+          load-balancer-id: ${{ inputs.load-balancer-id }}
+          backend-set-name: ${{ inputs.backend-set-name }}
+          new-instance-id: ${{ inputs.new-instance-id }}
+          current-instance-id: ${{ inputs.current-instance-id }}
+          backend-port: ${{ inputs.backend-port }}
+          ab-new-weight: ${{ inputs.ab-new-weight }}
+          ab-current-weight: ${{ inputs.ab-current-weight }}
+
+  observe_ab_test:
+    name: Observe A/B window
+    if: ${{ inputs.deployment-scenario == 'deploy' }}
+    needs: start_ab_test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for configured A/B observation window
+        shell: bash
+        run: |
+          set -euo pipefail
+          seconds="${{ inputs.ab-observation-seconds }}"
+          if [ "$seconds" -gt 0 ]; then
+            sleep "$seconds"
+          fi
+
+  verify_ab_health:
+    name: Verify A/B health
+    if: ${{ inputs.deployment-scenario == 'deploy' }}
+    needs: observe_ab_test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out common action repository
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .github-action-library
+          persist-credentials: false
+
+      - name: Wait for new backend to stay healthy
+        uses: ./.github-action-library/actions/oci-lb-bluegreen
+        with:
+          action: wait-new-backend-healthy
+          load-balancer-id: ${{ inputs.load-balancer-id }}
+          backend-set-name: ${{ inputs.backend-set-name }}
+          new-instance-id: ${{ inputs.new-instance-id }}
+          current-instance-id: ${{ inputs.current-instance-id }}
+          backend-port: ${{ inputs.backend-port }}
+          health-wait-attempts: ${{ inputs.health-wait-attempts }}
+          health-wait-seconds: ${{ inputs.health-wait-seconds }}
+
+      - name: Wait for current backend to stay healthy
+        uses: ./.github-action-library/actions/oci-lb-bluegreen
+        with:
+          action: wait-current-backend-healthy
+          load-balancer-id: ${{ inputs.load-balancer-id }}
+          backend-set-name: ${{ inputs.backend-set-name }}
+          new-instance-id: ${{ inputs.new-instance-id }}
+          current-instance-id: ${{ inputs.current-instance-id }}
+          backend-port: ${{ inputs.backend-port }}
+          health-wait-attempts: ${{ inputs.health-wait-attempts }}
+          health-wait-seconds: ${{ inputs.health-wait-seconds }}
+
+  rollback_after_ab_failure:
+    name: Rollback if A/B fails
+    if: ${{ always() && inputs.deployment-scenario == 'deploy' && (needs.start_ab_test.result == 'failure' || needs.verify_ab_health.result == 'failure') }}
+    needs:
+      - start_ab_test
+      - verify_ab_health
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out common action repository
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .github-action-library
+          persist-credentials: false
+
+      - name: Restore current backend and drain green
+        uses: ./.github-action-library/actions/oci-lb-bluegreen
+        with:
+          action: rollback-to-current
+          load-balancer-id: ${{ inputs.load-balancer-id }}
+          backend-set-name: ${{ inputs.backend-set-name }}
+          new-instance-id: ${{ inputs.new-instance-id }}
+          current-instance-id: ${{ inputs.current-instance-id }}
+          backend-port: ${{ inputs.backend-port }}
+          current-full-weight: ${{ inputs.current-full-weight }}
+
+      - name: Remove green backend after rollback
+        if: ${{ inputs.remove-new-on-rollback }}
+        uses: ./.github-action-library/actions/oci-lb-bluegreen
+        with:
+          action: remove-new-backend
+          load-balancer-id: ${{ inputs.load-balancer-id }}
+          backend-set-name: ${{ inputs.backend-set-name }}
+          new-instance-id: ${{ inputs.new-instance-id }}
+          current-instance-id: ${{ inputs.current-instance-id }}
+          backend-port: ${{ inputs.backend-port }}
+
+  promote_green:
+    name: Promote green backend
+    if: ${{ inputs.deployment-scenario == 'deploy' && inputs.auto-promote }}
+    needs: verify_ab_health
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out common action repository
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .github-action-library
+          persist-credentials: false
+
+      - name: Promote new backend and drain current backend
+        uses: ./.github-action-library/actions/oci-lb-bluegreen
+        with:
+          action: promote-new-backend
+          load-balancer-id: ${{ inputs.load-balancer-id }}
+          backend-set-name: ${{ inputs.backend-set-name }}
+          new-instance-id: ${{ inputs.new-instance-id }}
+          current-instance-id: ${{ inputs.current-instance-id }}
+          backend-port: ${{ inputs.backend-port }}
+          promote-new-weight: ${{ inputs.promote-new-weight }}
+
+  rollback_after_promotion_failure:
+    name: Rollback if promotion fails
+    if: ${{ always() && inputs.deployment-scenario == 'deploy' && inputs.auto-promote && needs.promote_green.result == 'failure' }}
+    needs: promote_green
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out common action repository
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .github-action-library
+          persist-credentials: false
+
+      - name: Restore current backend after promotion failure
+        uses: ./.github-action-library/actions/oci-lb-bluegreen
+        with:
+          action: rollback-to-current
+          load-balancer-id: ${{ inputs.load-balancer-id }}
+          backend-set-name: ${{ inputs.backend-set-name }}
+          new-instance-id: ${{ inputs.new-instance-id }}
+          current-instance-id: ${{ inputs.current-instance-id }}
+          backend-port: ${{ inputs.backend-port }}
+          current-full-weight: ${{ inputs.current-full-weight }}
+
+  hold_ab_status:
+    name: A/B status without auto-promotion
+    if: ${{ inputs.deployment-scenario == 'deploy' && !inputs.auto-promote }}
+    needs: verify_ab_health
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out common action repository
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .github-action-library
+          persist-credentials: false
+
+      - name: Print A/B backend status
+        uses: ./.github-action-library/actions/oci-lb-bluegreen
+        with:
+          action: status
+          load-balancer-id: ${{ inputs.load-balancer-id }}
+          backend-set-name: ${{ inputs.backend-set-name }}
+          new-instance-id: ${{ inputs.new-instance-id }}
+          current-instance-id: ${{ inputs.current-instance-id }}
+          backend-port: ${{ inputs.backend-port }}
+
+  promote_request:
+    name: Promote existing A/B deployment
+    if: ${{ inputs.deployment-scenario == 'promote' }}
+    needs: validate_request
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out common action repository
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .github-action-library
+          persist-credentials: false
+
+      - name: Promote new backend
+        uses: ./.github-action-library/actions/oci-lb-bluegreen
+        with:
+          action: promote-new-backend
+          load-balancer-id: ${{ inputs.load-balancer-id }}
+          backend-set-name: ${{ inputs.backend-set-name }}
+          new-instance-id: ${{ inputs.new-instance-id }}
+          current-instance-id: ${{ inputs.current-instance-id }}
+          backend-port: ${{ inputs.backend-port }}
+          promote-new-weight: ${{ inputs.promote-new-weight }}
+
+  rollback_request:
+    name: Rollback to current backend
+    if: ${{ inputs.deployment-scenario == 'rollback' }}
+    needs: validate_request
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out common action repository
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .github-action-library
+          persist-credentials: false
+
+      - name: Rollback to current backend
+        uses: ./.github-action-library/actions/oci-lb-bluegreen
+        with:
+          action: rollback-to-current
+          load-balancer-id: ${{ inputs.load-balancer-id }}
+          backend-set-name: ${{ inputs.backend-set-name }}
+          new-instance-id: ${{ inputs.new-instance-id }}
+          current-instance-id: ${{ inputs.current-instance-id }}
+          backend-port: ${{ inputs.backend-port }}
+          current-full-weight: ${{ inputs.current-full-weight }}
+
+      - name: Remove green backend after rollback
+        if: ${{ inputs.remove-new-on-rollback }}
+        uses: ./.github-action-library/actions/oci-lb-bluegreen
+        with:
+          action: remove-new-backend
+          load-balancer-id: ${{ inputs.load-balancer-id }}
+          backend-set-name: ${{ inputs.backend-set-name }}
+          new-instance-id: ${{ inputs.new-instance-id }}
+          current-instance-id: ${{ inputs.current-instance-id }}
+          backend-port: ${{ inputs.backend-port }}
+
+  cleanup_request:
+    name: Remove new backend
+    if: ${{ inputs.deployment-scenario == 'cleanup' }}
+    needs: validate_request
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out common action repository
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .github-action-library
+          persist-credentials: false
+
+      - name: Remove new backend from backend set
+        uses: ./.github-action-library/actions/oci-lb-bluegreen
+        with:
+          action: remove-new-backend
+          load-balancer-id: ${{ inputs.load-balancer-id }}
+          backend-set-name: ${{ inputs.backend-set-name }}
+          new-instance-id: ${{ inputs.new-instance-id }}
+          current-instance-id: ${{ inputs.current-instance-id }}
+          backend-port: ${{ inputs.backend-port }}
+
+  status_request:
+    name: Show backend status
+    if: ${{ inputs.deployment-scenario == 'status' }}
+    needs: validate_request
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out common action repository
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .github-action-library
+          persist-credentials: false
+
+      - name: Print backend status
+        uses: ./.github-action-library/actions/oci-lb-bluegreen
+        with:
+          action: status
+          load-balancer-id: ${{ inputs.load-balancer-id }}
+          backend-set-name: ${{ inputs.backend-set-name }}
+          new-instance-id: ${{ inputs.new-instance-id }}
+          current-instance-id: ${{ inputs.current-instance-id }}
+          backend-port: ${{ inputs.backend-port }}
+
+  deployment_result:
+    name: Deployment result
+    if: ${{ always() && inputs.deployment-scenario == 'deploy' }}
+    needs:
+      - preflight
+      - stage_green_backend
+      - verify_green_health
+      - cleanup_after_green_health_failure
+      - start_ab_test
+      - observe_ab_test
+      - verify_ab_health
+      - rollback_after_ab_failure
+      - promote_green
+      - rollback_after_promotion_failure
+      - hold_ab_status
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate deployment result
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "preflight=${{ needs.preflight.result }}"
+          echo "stage_green_backend=${{ needs.stage_green_backend.result }}"
+          echo "verify_green_health=${{ needs.verify_green_health.result }}"
+          echo "start_ab_test=${{ needs.start_ab_test.result }}"
+          echo "observe_ab_test=${{ needs.observe_ab_test.result }}"
+          echo "verify_ab_health=${{ needs.verify_ab_health.result }}"
+          echo "promote_green=${{ needs.promote_green.result }}"
+          echo "hold_ab_status=${{ needs.hold_ab_status.result }}"
+          echo "rollback_after_ab_failure=${{ needs.rollback_after_ab_failure.result }}"
+          echo "rollback_after_promotion_failure=${{ needs.rollback_after_promotion_failure.result }}"
+
+          required_jobs="${{ needs.preflight.result }} ${{ needs.stage_green_backend.result }} ${{ needs.verify_green_health.result }} ${{ needs.start_ab_test.result }} ${{ needs.observe_ab_test.result }} ${{ needs.verify_ab_health.result }}"
+          for result in $required_jobs; do
+            if [ "$result" != "success" ]; then
+              echo "Deployment failed before or during A/B validation." >&2
+              exit 1
+            fi
+          done
+
+          if [ "${{ inputs.auto-promote }}" = "true" ]; then
+            if [ "${{ needs.promote_green.result }}" != "success" ]; then
+              echo "Deployment failed during promotion." >&2
+              exit 1
+            fi
+            echo "Deployment completed: new backend promoted and current backend drained."
+          else
+            if [ "${{ needs.hold_ab_status.result }}" != "success" ]; then
+              echo "Deployment reached A/B validation but status reporting failed." >&2
+              exit 1
+            fi
+            echo "Deployment completed: A/B traffic split is active and no auto-promotion was requested."
+          fi

@@ -1,0 +1,498 @@
+name: OCI Load Balancer Blue/Green Backend Operation
+description: Performs one OCI Load Balancer backend operation for blue/green and A/B deployments.
+
+inputs:
+  action:
+    description: "Operation to perform. Supported values: validate-health-check-path, add-new-backend-no-traffic, wait-new-backend-healthy, wait-current-backend-healthy, start-ab-test, promote-new-backend, drain-current-backend, rollback-to-current, remove-new-backend, status."
+    required: true
+  load-balancer-id:
+    description: OCID of the OCI Load Balancer.
+    required: true
+  backend-set-name:
+    description: Name of the backend set in the OCI Load Balancer.
+    required: true
+  new-instance-id:
+    description: OCID of the VM that contains the new application version.
+    required: true
+  current-instance-id:
+    description: OCID of the VM that contains the current application version.
+    required: true
+  backend-port:
+    description: Application port registered in the load balancer backend set.
+    required: false
+    default: '80'
+  health-check-path:
+    description: Expected HTTP health-check path configured on the backend set.
+    required: false
+    default: '/health'
+  health-wait-attempts:
+    description: Number of times to poll OCI backend health for wait-* actions.
+    required: false
+    default: '20'
+  health-wait-seconds:
+    description: Seconds to wait between backend health polling attempts.
+    required: false
+    default: '15'
+  staging-weight:
+    description: Weight assigned when adding the new backend while drained.
+    required: false
+    default: '1'
+  ab-new-weight:
+    description: Weight assigned to the new backend during A/B testing.
+    required: false
+    default: '10'
+  ab-current-weight:
+    description: Weight assigned to the current backend during A/B testing.
+    required: false
+    default: '90'
+  promote-new-weight:
+    description: Weight assigned to the new backend after promotion.
+    required: false
+    default: '100'
+  current-full-weight:
+    description: Weight assigned to the current backend during rollback.
+    required: false
+    default: '100'
+  work-request-max-wait-seconds:
+    description: Maximum seconds to wait for OCI load balancer work requests.
+    required: false
+    default: '1200'
+  work-request-wait-interval-seconds:
+    description: Polling interval for OCI load balancer work requests.
+    required: false
+    default: '10'
+
+outputs:
+  new-private-ip:
+    description: Private IP resolved from the new VM primary VNIC.
+    value: ${{ steps.new-private-ip.outputs.raw_output }}
+  current-private-ip:
+    description: Private IP resolved from the current VM primary VNIC.
+    value: ${{ steps.current-private-ip.outputs.raw_output }}
+  new-backend-name:
+    description: OCI backend name for the new VM, normally privateIp:port.
+    value: ${{ steps.backend-names.outputs.new-backend-name }}
+  current-backend-name:
+    description: OCI backend name for the current VM, normally privateIp:port.
+    value: ${{ steps.backend-names.outputs.current-backend-name }}
+  health-status:
+    description: Last health status observed by wait-* actions.
+    value: ${{ steps.wait-backend-health.outputs.health-status }}
+  health-check-path:
+    description: Health check path currently configured on the backend set.
+    value: ${{ steps.health-checker-path.outputs.raw_output }}
+  backend-set-policy:
+    description: Load balancing policy currently configured on the backend set.
+    value: ${{ steps.backend-set-policy.outputs.raw_output }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate inputs
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        case "${{ inputs.action }}" in
+          validate-health-check-path|add-new-backend-no-traffic|wait-new-backend-healthy|wait-current-backend-healthy|start-ab-test|promote-new-backend|drain-current-backend|rollback-to-current|remove-new-backend|status)
+            ;;
+          *)
+            echo "Unsupported action: ${{ inputs.action }}" >&2
+            exit 1
+            ;;
+        esac
+
+        case "${{ inputs.backend-port }}" in
+          ''|*[!0-9]*) echo "backend-port must be numeric." >&2; exit 1 ;;
+        esac
+
+        for value_name in health-wait-attempts health-wait-seconds staging-weight ab-new-weight ab-current-weight promote-new-weight current-full-weight work-request-max-wait-seconds work-request-wait-interval-seconds; do
+          value=""
+          case "$value_name" in
+            health-wait-attempts) value="${{ inputs.health-wait-attempts }}" ;;
+            health-wait-seconds) value="${{ inputs.health-wait-seconds }}" ;;
+            staging-weight) value="${{ inputs.staging-weight }}" ;;
+            ab-new-weight) value="${{ inputs.ab-new-weight }}" ;;
+            ab-current-weight) value="${{ inputs.ab-current-weight }}" ;;
+            promote-new-weight) value="${{ inputs.promote-new-weight }}" ;;
+            current-full-weight) value="${{ inputs.current-full-weight }}" ;;
+            work-request-max-wait-seconds) value="${{ inputs.work-request-max-wait-seconds }}" ;;
+            work-request-wait-interval-seconds) value="${{ inputs.work-request-wait-interval-seconds }}" ;;
+          esac
+          case "$value" in
+            ''|*[!0-9]*) echo "$value_name must be numeric." >&2; exit 1 ;;
+          esac
+        done
+
+        case "${{ inputs.health-check-path }}" in
+          /*) ;;
+          *) echo "health-check-path must start with /." >&2; exit 1 ;;
+        esac
+
+    - name: Resolve new VM compartment
+      id: new-compartment
+      uses: oracle-actions/run-oci-cli-command@v1.3.2
+      with:
+        command: 'compute instance get --instance-id ${{ inputs.new-instance-id }}'
+        query: 'data.\"compartment-id\"'
+
+    - name: Resolve current VM compartment
+      id: current-compartment
+      uses: oracle-actions/run-oci-cli-command@v1.3.2
+      with:
+        command: 'compute instance get --instance-id ${{ inputs.current-instance-id }}'
+        query: 'data.\"compartment-id\"'
+
+    - name: Resolve new VM primary VNIC attachment
+      id: new-vnic-attachment
+      uses: oracle-actions/run-oci-cli-command@v1.3.2
+      with:
+        command: 'compute vnic-attachment list --compartment-id ${{ steps.new-compartment.outputs.raw_output }} --instance-id ${{ inputs.new-instance-id }}'
+        query: 'data[?\"lifecycle-state\"==''ATTACHED''] | [0].\"vnic-id\"'
+
+    - name: Resolve current VM primary VNIC attachment
+      id: current-vnic-attachment
+      uses: oracle-actions/run-oci-cli-command@v1.3.2
+      with:
+        command: 'compute vnic-attachment list --compartment-id ${{ steps.current-compartment.outputs.raw_output }} --instance-id ${{ inputs.current-instance-id }}'
+        query: 'data[?\"lifecycle-state\"==''ATTACHED''] | [0].\"vnic-id\"'
+
+    - name: Resolve new VM private IP
+      id: new-private-ip
+      uses: oracle-actions/run-oci-cli-command@v1.3.2
+      with:
+        command: 'network vnic get --vnic-id ${{ steps.new-vnic-attachment.outputs.raw_output }}'
+        query: 'data.\"private-ip\"'
+
+    - name: Resolve current VM private IP
+      id: current-private-ip
+      uses: oracle-actions/run-oci-cli-command@v1.3.2
+      with:
+        command: 'network vnic get --vnic-id ${{ steps.current-vnic-attachment.outputs.raw_output }}'
+        query: 'data.\"private-ip\"'
+
+    - name: Build backend names
+      id: backend-names
+      shell: bash
+      run: |
+        set -euo pipefail
+        new_ip="${{ steps.new-private-ip.outputs.raw_output }}"
+        current_ip="${{ steps.current-private-ip.outputs.raw_output }}"
+        port="${{ inputs.backend-port }}"
+
+        if [ -z "$new_ip" ] || [ -z "$current_ip" ]; then
+          echo "Failed to resolve one or both VM private IPs." >&2
+          exit 1
+        fi
+
+        echo "new-backend-name=${new_ip}:${port}" >> "$GITHUB_OUTPUT"
+        echo "current-backend-name=${current_ip}:${port}" >> "$GITHUB_OUTPUT"
+
+    - name: Get backend set policy
+      id: backend-set-policy
+      uses: oracle-actions/run-oci-cli-command@v1.3.2
+      with:
+        command: 'lb backend-set get --backend-set-name "${{ inputs.backend-set-name }}" --load-balancer-id "${{ inputs.load-balancer-id }}"'
+        query: 'data.policy'
+
+    - name: Get configured health-check path
+      id: health-checker-path
+      if: ${{ inputs.action == 'validate-health-check-path' }}
+      uses: oracle-actions/run-oci-cli-command@v1.3.2
+      with:
+        command: 'lb health-checker get --backend-set-name "${{ inputs.backend-set-name }}" --load-balancer-id "${{ inputs.load-balancer-id }}"'
+        query: 'data.\"url-path\"'
+
+    - name: Validate health-check path
+      if: ${{ inputs.action == 'validate-health-check-path' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        expected="${{ inputs.health-check-path }}"
+        actual="${{ steps.health-checker-path.outputs.raw_output }}"
+        policy="${{ steps.backend-set-policy.outputs.raw_output }}"
+
+        if [ -z "$actual" ] || [ "$actual" = "null" ]; then
+          echo "Backend set health checker does not expose a URL path. This action expects an HTTP or HTTPS health check." >&2
+          exit 1
+        fi
+
+        if [ "$actual" != "$expected" ]; then
+          echo "Health-check path mismatch. Expected '$expected' but backend set is configured with '$actual'." >&2
+          exit 1
+        fi
+
+        echo "Health-check path validated: $actual"
+        echo "Backend set policy: $policy"
+
+    - name: Check new backend presence
+      id: new-backend-presence
+      if: ${{ inputs.action == 'add-new-backend-no-traffic' || inputs.action == 'remove-new-backend' }}
+      shell: bash
+      env:
+        LOAD_BALANCER_ID: ${{ inputs.load-balancer-id }}
+        BACKEND_SET_NAME: ${{ inputs.backend-set-name }}
+        NEW_BACKEND_NAME: ${{ steps.backend-names.outputs.new-backend-name }}
+      run: |
+        set -euo pipefail
+
+        if oci lb backend get \
+          --backend-name "$NEW_BACKEND_NAME" \
+          --backend-set-name "$BACKEND_SET_NAME" \
+          --load-balancer-id "$LOAD_BALANCER_ID" >/dev/null 2>&1; then
+          echo "exists=true" >> "$GITHUB_OUTPUT"
+          echo "New backend already exists: $NEW_BACKEND_NAME"
+        else
+          echo "exists=false" >> "$GITHUB_OUTPUT"
+          echo "New backend does not exist yet: $NEW_BACKEND_NAME"
+        fi
+
+    - name: Add new backend with no new traffic
+      id: add-new-backend
+      if: ${{ inputs.action == 'add-new-backend-no-traffic' && steps.new-backend-presence.outputs.exists == 'false' }}
+      uses: oracle-actions/run-oci-cli-command@v1.3.2
+      with:
+        command: >-
+          lb backend create
+          --backend-set-name "${{ inputs.backend-set-name }}"
+          --ip-address "${{ steps.new-private-ip.outputs.raw_output }}"
+          --load-balancer-id "${{ inputs.load-balancer-id }}"
+          --port ${{ inputs.backend-port }}
+          --backup false
+          --drain true
+          --offline false
+          --weight ${{ inputs.staging-weight }}
+          --wait-for-state SUCCEEDED
+          --max-wait-seconds ${{ inputs.work-request-max-wait-seconds }}
+          --wait-interval-seconds ${{ inputs.work-request-wait-interval-seconds }}
+
+    - name: Keep existing new backend drained before health validation
+      id: update-existing-new-backend
+      if: ${{ inputs.action == 'add-new-backend-no-traffic' && steps.new-backend-presence.outputs.exists == 'true' }}
+      uses: oracle-actions/run-oci-cli-command@v1.3.2
+      with:
+        command: >-
+          lb backend update
+          --backend-name "${{ steps.backend-names.outputs.new-backend-name }}"
+          --backend-set-name "${{ inputs.backend-set-name }}"
+          --load-balancer-id "${{ inputs.load-balancer-id }}"
+          --backup false
+          --drain true
+          --offline false
+          --weight ${{ inputs.staging-weight }}
+          --wait-for-state SUCCEEDED
+          --max-wait-seconds ${{ inputs.work-request-max-wait-seconds }}
+          --wait-interval-seconds ${{ inputs.work-request-wait-interval-seconds }}
+
+    - name: Wait for backend health OK
+      id: wait-backend-health
+      if: ${{ inputs.action == 'wait-new-backend-healthy' || inputs.action == 'wait-current-backend-healthy' }}
+      shell: bash
+      env:
+        LOAD_BALANCER_ID: ${{ inputs.load-balancer-id }}
+        BACKEND_SET_NAME: ${{ inputs.backend-set-name }}
+        ACTION_NAME: ${{ inputs.action }}
+        NEW_BACKEND_NAME: ${{ steps.backend-names.outputs.new-backend-name }}
+        CURRENT_BACKEND_NAME: ${{ steps.backend-names.outputs.current-backend-name }}
+        ATTEMPTS: ${{ inputs.health-wait-attempts }}
+        SLEEP_SECONDS: ${{ inputs.health-wait-seconds }}
+      run: |
+        set -euo pipefail
+
+        if [ "$ACTION_NAME" = "wait-current-backend-healthy" ]; then
+          backend_name="$CURRENT_BACKEND_NAME"
+        else
+          backend_name="$NEW_BACKEND_NAME"
+        fi
+
+        last_status="UNKNOWN"
+        for attempt in $(seq 1 "$ATTEMPTS"); do
+          set +e
+          status="$(oci lb backend-health get \
+            --backend-name "$backend_name" \
+            --backend-set-name "$BACKEND_SET_NAME" \
+            --load-balancer-id "$LOAD_BALANCER_ID" \
+            --query 'data.status' \
+            --raw-output 2>/tmp/oci-lb-backend-health.err)"
+          rc=$?
+          set -e
+
+          if [ "$rc" -ne 0 ]; then
+            echo "Health query failed for $backend_name on attempt $attempt/$ATTEMPTS." >&2
+            cat /tmp/oci-lb-backend-health.err >&2 || true
+            last_status="QUERY_FAILED"
+          else
+            last_status="$status"
+            echo "Backend $backend_name health status: $status"
+            if [ "$status" = "OK" ]; then
+              echo "health-status=$status" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+
+          if [ "$attempt" -lt "$ATTEMPTS" ]; then
+            sleep "$SLEEP_SECONDS"
+          fi
+        done
+
+        echo "health-status=$last_status" >> "$GITHUB_OUTPUT"
+        echo "Backend $backend_name did not reach health status OK. Last status: $last_status" >&2
+        exit 1
+
+    - name: Start A/B test by enabling weighted traffic
+      id: start-ab-current
+      if: ${{ inputs.action == 'start-ab-test' }}
+      uses: oracle-actions/run-oci-cli-command@v1.3.2
+      with:
+        command: >-
+          lb backend update
+          --backend-name "${{ steps.backend-names.outputs.current-backend-name }}"
+          --backend-set-name "${{ inputs.backend-set-name }}"
+          --load-balancer-id "${{ inputs.load-balancer-id }}"
+          --backup false
+          --drain false
+          --offline false
+          --weight ${{ inputs.ab-current-weight }}
+          --wait-for-state SUCCEEDED
+          --max-wait-seconds ${{ inputs.work-request-max-wait-seconds }}
+          --wait-interval-seconds ${{ inputs.work-request-wait-interval-seconds }}
+
+    - name: Enable new backend for A/B test
+      id: start-ab-new
+      if: ${{ inputs.action == 'start-ab-test' }}
+      uses: oracle-actions/run-oci-cli-command@v1.3.2
+      with:
+        command: >-
+          lb backend update
+          --backend-name "${{ steps.backend-names.outputs.new-backend-name }}"
+          --backend-set-name "${{ inputs.backend-set-name }}"
+          --load-balancer-id "${{ inputs.load-balancer-id }}"
+          --backup false
+          --drain false
+          --offline false
+          --weight ${{ inputs.ab-new-weight }}
+          --wait-for-state SUCCEEDED
+          --max-wait-seconds ${{ inputs.work-request-max-wait-seconds }}
+          --wait-interval-seconds ${{ inputs.work-request-wait-interval-seconds }}
+
+    - name: Promote new backend to primary traffic
+      id: promote-new
+      if: ${{ inputs.action == 'promote-new-backend' }}
+      uses: oracle-actions/run-oci-cli-command@v1.3.2
+      with:
+        command: >-
+          lb backend update
+          --backend-name "${{ steps.backend-names.outputs.new-backend-name }}"
+          --backend-set-name "${{ inputs.backend-set-name }}"
+          --load-balancer-id "${{ inputs.load-balancer-id }}"
+          --backup false
+          --drain false
+          --offline false
+          --weight ${{ inputs.promote-new-weight }}
+          --wait-for-state SUCCEEDED
+          --max-wait-seconds ${{ inputs.work-request-max-wait-seconds }}
+          --wait-interval-seconds ${{ inputs.work-request-wait-interval-seconds }}
+
+    - name: Drain current backend after promotion
+      id: promote-drain-current
+      if: ${{ inputs.action == 'promote-new-backend' || inputs.action == 'drain-current-backend' }}
+      uses: oracle-actions/run-oci-cli-command@v1.3.2
+      with:
+        command: >-
+          lb backend update
+          --backend-name "${{ steps.backend-names.outputs.current-backend-name }}"
+          --backend-set-name "${{ inputs.backend-set-name }}"
+          --load-balancer-id "${{ inputs.load-balancer-id }}"
+          --backup false
+          --drain true
+          --offline false
+          --weight 1
+          --wait-for-state SUCCEEDED
+          --max-wait-seconds ${{ inputs.work-request-max-wait-seconds }}
+          --wait-interval-seconds ${{ inputs.work-request-wait-interval-seconds }}
+
+    - name: Restore current backend during rollback
+      id: rollback-current
+      if: ${{ inputs.action == 'rollback-to-current' }}
+      uses: oracle-actions/run-oci-cli-command@v1.3.2
+      with:
+        command: >-
+          lb backend update
+          --backend-name "${{ steps.backend-names.outputs.current-backend-name }}"
+          --backend-set-name "${{ inputs.backend-set-name }}"
+          --load-balancer-id "${{ inputs.load-balancer-id }}"
+          --backup false
+          --drain false
+          --offline false
+          --weight ${{ inputs.current-full-weight }}
+          --wait-for-state SUCCEEDED
+          --max-wait-seconds ${{ inputs.work-request-max-wait-seconds }}
+          --wait-interval-seconds ${{ inputs.work-request-wait-interval-seconds }}
+
+    - name: Drain new backend during rollback
+      id: rollback-new
+      if: ${{ inputs.action == 'rollback-to-current' }}
+      uses: oracle-actions/run-oci-cli-command@v1.3.2
+      with:
+        command: >-
+          lb backend update
+          --backend-name "${{ steps.backend-names.outputs.new-backend-name }}"
+          --backend-set-name "${{ inputs.backend-set-name }}"
+          --load-balancer-id "${{ inputs.load-balancer-id }}"
+          --backup false
+          --drain true
+          --offline false
+          --weight 1
+          --wait-for-state SUCCEEDED
+          --max-wait-seconds ${{ inputs.work-request-max-wait-seconds }}
+          --wait-interval-seconds ${{ inputs.work-request-wait-interval-seconds }}
+
+    - name: Remove new backend
+      id: remove-new
+      if: ${{ inputs.action == 'remove-new-backend' && steps.new-backend-presence.outputs.exists == 'true' }}
+      uses: oracle-actions/run-oci-cli-command@v1.3.2
+      with:
+        command: >-
+          lb backend delete
+          --backend-name "${{ steps.backend-names.outputs.new-backend-name }}"
+          --backend-set-name "${{ inputs.backend-set-name }}"
+          --load-balancer-id "${{ inputs.load-balancer-id }}"
+          --force
+          --wait-for-state SUCCEEDED
+          --max-wait-seconds ${{ inputs.work-request-max-wait-seconds }}
+          --wait-interval-seconds ${{ inputs.work-request-wait-interval-seconds }}
+
+    - name: Skip remove because new backend is absent
+      if: ${{ inputs.action == 'remove-new-backend' && steps.new-backend-presence.outputs.exists == 'false' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "New backend is already absent: ${{ steps.backend-names.outputs.new-backend-name }}"
+
+    - name: Print backend status
+      id: status
+      if: ${{ inputs.action == 'status' }}
+      shell: bash
+      env:
+        LOAD_BALANCER_ID: ${{ inputs.load-balancer-id }}
+        BACKEND_SET_NAME: ${{ inputs.backend-set-name }}
+        NEW_BACKEND_NAME: ${{ steps.backend-names.outputs.new-backend-name }}
+        CURRENT_BACKEND_NAME: ${{ steps.backend-names.outputs.current-backend-name }}
+      run: |
+        set -euo pipefail
+
+        echo "Backend set: $BACKEND_SET_NAME"
+        echo "Load balancer: $LOAD_BALANCER_ID"
+        echo "Current backend: $CURRENT_BACKEND_NAME"
+        oci lb backend get \
+          --backend-name "$CURRENT_BACKEND_NAME" \
+          --backend-set-name "$BACKEND_SET_NAME" \
+          --load-balancer-id "$LOAD_BALANCER_ID" \
+          --query 'data.{name:name,weight:weight,drain:drain,offline:offline,backup:backup}' || true
+
+        echo "New backend: $NEW_BACKEND_NAME"
+        oci lb backend get \
+          --backend-name "$NEW_BACKEND_NAME" \
+          --backend-set-name "$BACKEND_SET_NAME" \
+          --load-balancer-id "$LOAD_BALANCER_ID" \
+          --query 'data.{name:name,weight:weight,drain:drain,offline:offline,backup:backup}' || true
