@@ -50,9 +50,9 @@ The following are **new** and must be added before the first run:
 | --- | --- | --- | --- |
 | `OCI_LB_OCID` | variable | repo | OCID of the shared OCI Load Balancer (`OCI_LB_OCID` from `infra/linker.env`) |
 | `OCI_LB_LINKER_BACKEND` | variable | repo | Backend set name (`linker-1` — `OCI_LB_LINKER_BACKEND` from `infra/linker.env`) |
-| `TF_COMPARTMENT_ID` | variable | repo | OCI compartment OCID for the new VM |
-| `TF_SUBNET_ID` | variable | repo | Subnet OCID (`OCI_LINKER_SUBNET_OCID` from `infra/linker.env`) |
-| `TF_IMAGE_ID` | variable | repo | OCI image OCID used to create the VM |
+| `TF_COMPARTMENT_ID` | variable | repo | OCI compartment OCID the VM is *launched into* — this is your team's own compartment (e.g. `cmp-lz-prod-linker-1`), **not** the network compartment the shared subnet lives in. `oci iam compartment list --compartment-id-in-subtree true --all` lists every compartment your account can see; pick the one named after your team (`cmp-lz-prod-linker-<N>`). Confirm access with `oci compute image list --compartment-id <candidate>` before setting this — if it 404s, it's the wrong compartment (or you lack access to it), not a policy problem to escalate. |
+| `TF_SUBNET_ID` | variable | repo | Subnet OCID (`OCI_LINKER_SUBNET_OCID` from `infra/linker.env`). Lives in a *different*, shared network compartment — this is expected, subnets and instances don't need to be in the same compartment. |
+| `TF_IMAGE_ID` | variable | repo | OCI image OCID used to create the VM. Must be listed by `oci compute image list --compartment-id <TF_COMPARTMENT_ID value>` — platform images aren't compartment-scoped in the API response (`"compartment-id": null` on `image get`), but `LaunchInstance` still requires the *launching* compartment to have access to the image, so verify against the real `TF_COMPARTMENT_ID`, not just that the OCID resolves at all. |
 | `OCI_INSTANCE_OCID` | variable | repo | OCID of the current blue VM (updated automatically after each successful deploy; must be set manually for the very first run) |
 
 One-time setup commands (run from OCI Cloud Shell or locally with the OCI CLI configured):
@@ -67,6 +67,8 @@ gh variable set OCI_INSTANCE_OCID     --body "<current-blue-vm-ocid>"
 ```
 
 `DEPLOYMENT_PUBLIC_KEY` (already a repo secret) is reused as the SSH key for the new VM.
+
+**Debugging `404-NotAuthorizedOrNotFound` on `terraform apply`'s `LaunchInstance` call**: OCI deliberately returns this same error for "doesn't exist" and "no permission," so it doesn't distinguish a bad OCID from a real access problem. Isolate which one it is with `oci compute image list --compartment-id <TF_COMPARTMENT_ID>` — if that 404s too, `TF_COMPARTMENT_ID` itself is wrong (most likely: it got set to a *network*/platform compartment instead of your team's own compartment, since `TF_SUBNET_ID` legitimately lives in a different one and it's easy to conflate the two). Run `oci iam compartment list --compartment-id-in-subtree true --all` to find your real compartment, confirm access with the `image list` command above, then update `TF_COMPARTMENT_ID`. This exact issue cost significant time during the 2026-07 VM recreation after the course's shared VMs were deleted — `TF_COMPARTMENT_ID` had been set to the network/platform compartment instead of `cmp-lz-prod-linker-1`.
 
 ### Health check
 
@@ -85,7 +87,7 @@ In all failure cases: blue VM keeps 100% traffic, `OCI_INSTANCE_OCID` is unchang
 ### Notes
 
 - **Green VM builds from source**: `infra/cloud-init.yaml` runs `git clone + mvn clean package` on first boot.  It clones the repo's default branch HEAD, not the exact triggering commit.  The `build` job at the start of the workflow acts as a compile gate, but the compiled jar in CI is not transferred to the VM.
-- **`pipeline.yml` `deploy-prod` job**: references deleted VMs and will fail.  It is superseded by this workflow and should be removed as a follow-up.
+- **`pipeline.yml` `deploy-prod` job**: superseded by this workflow. It reads `vars.OCI_INSTANCE_OCID` dynamically (kept up to date by `bluegreen.yml`'s `teardown-blue-on-success` step), so it doesn't hardcode a specific VM and won't outright fail just because a VM was recreated — but it deploys straight to the "current" instance with no green/health-check/rollback safety, bypassing the whole point of this workflow. Should be removed as a follow-up once `bluegreen.yml` is confirmed working end to end.
 - **`variables: write`**: the `teardown-blue-on-success` job uses `GITHUB_TOKEN` with `permissions: actions: write` to call `gh variable set`.  If this fails due to org policy, create a PAT with `repo` scope, store it as `secrets.GH_PAT`, and replace `secrets.GITHUB_TOKEN` in that step.
 
 ---
@@ -98,7 +100,9 @@ The documentation below describes the old `pipeline.yml`-based single-VM deploym
 
 Linker1 runs on a single OCI VM (production, `https://1.n-la-c.app`) created with the IaC in `infra/` (`assign_public_ip = false`: the instance has no public IP). Before this change, `.github/workflows/pipeline.yml` didn't deploy anything real: the `deploy-dev`, `validate-dev`, and `deploy-prod` jobs were placeholders that only did `echo`, and the one real job (`rollback`) assumed direct SSH to a public `VM_HOST` that never existed or was configured.
 
-The real mechanism, provided by the course instructor, is a shared composite action (`co-eiv-devsecops/material-curso/actions/oci-bastion-deploy@main`) that reaches the VM through an **OCI Bastion** (an SSH session managed by OCI, with no public IP needed). This document describes how the pipeline was set up around that mechanism.
+The real mechanism, originally provided by the course instructor as a shared composite action (`co-eiv-devsecops/material-curso/actions/oci-bastion-deploy@main`), reaches the VM through an **OCI Bastion** (an SSH session managed by OCI, with no public IP needed). This document describes how the pipeline was set up around that mechanism.
+
+**Vendored, not cross-repo, as of 2026-07**: `material-curso`'s cross-repo Actions access broke sometime after 2026-07-11 (every workflow depending on it started failing with `Unable to resolve action ... not found`, most likely an org policy change during the course's final week). `oci-bastion-deploy` and `oci-lb-bluegreen` (plus the `oci-lb-bluegreen-ab.yml` reusable workflow) are now vendored directly into this repo at `actions/` and `.github/workflows/oci-lb-bluegreen-ab.yml` respectively, with local `uses: ./actions/...` references instead of the original cross-repo ones. The content is unmodified from the source; only the reference paths changed.
 
 The action downloads a GitHub Actions artifact, opens a `bastion session create-managed-ssh` session against `instance-id`, authenticating with `env.DEPLOYMENT_PUBLIC_KEY`/`env.OCI_BASTION_OCID`, copies the artifact's contents to `target-path` (via `sudo tar -x`), runs `script` over SSH with the working directory already set to `target-path` and the `DEPLOY_PATH` variable pointing there, and deletes the bastion session at the end. The `artifact-name` and `target-path` inputs are **required** (`required: true`) even when a new artifact isn't needed, so the `rollback` job reuses the `linker-app` artifact that `Build` already uploaded in the same run, purely to satisfy that requirement. The action has no `ssh-public-key` or `bastion-id` inputs (unlike the template the instructor shared); it takes those values from `env.DEPLOYMENT_PUBLIC_KEY`/`env.OCI_BASTION_OCID`, which are indeed declared in the job's `env:` block.
 
