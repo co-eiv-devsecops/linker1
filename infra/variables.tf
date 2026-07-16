@@ -86,8 +86,3 @@ variable "instance_display_name" {
   type    = string
   default = "vm-linker1-iac"
 }
-
-variable "availability_domain" {
-  type    = string
-  default = "AD-1"
-}

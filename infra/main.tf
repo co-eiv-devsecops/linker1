@@ -2,6 +2,12 @@ data "oci_core_subnet" "linker1_subnet" {
   subnet_id = var.subnet_id
 }
 
+# Discover the first availability domain automatically so the workflow never
+# needs to know the full AD name (e.g. "gnbE:SA-BOGOTA-1-AD-1").
+data "oci_identity_availability_domains" "ads" {
+  compartment_id = var.compartment_id
+}
+
 locals {
   # systemd's unit-file parser treats a bare "%" as the start of a specifier
   # (%h, %n, ...) and a bare '"' inside a quoted Environment= value as the end
@@ -35,7 +41,7 @@ locals {
 
 resource "oci_core_instance" "linker1_vm" {
   compartment_id      = var.compartment_id
-  availability_domain = var.availability_domain
+  availability_domain = data.oci_identity_availability_domains.ads.availability_domains[0].name
   display_name        = var.instance_display_name
   shape               = var.instance_shape
 
