@@ -65,6 +65,18 @@ resource "oci_core_instance" "linker1_vm" {
     user_data           = base64encode(local.cloud_init_rendered)
   }
 
+  # Off by default on new instances -- without it, `oci bastion session
+  # create-managed-ssh` fails with "the Bastion plugin must be enabled on the
+  # target instance" and there's no way to reach the VM to debug anything.
+  # Discovered the hard way: the VM this fix followed had no way to be
+  # inspected when its OCI Load Balancer backend health went CRITICAL.
+  agent_config {
+    plugins_config {
+      name          = "Bastion"
+      desired_state = "ENABLED"
+    }
+  }
+
   lifecycle {
     ignore_changes = [source_details[0].source_id]
   }
