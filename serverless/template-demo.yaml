@@ -1,0 +1,54 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Linker1 serverless DEMO deployment (issue #74). Same handler and same fat
+  jar as the production template (template.yaml), but self-contained: no VPC,
+  no external MySQL, and it reuses a pre-existing IAM execution role instead
+  of creating one -- so it deploys cleanly in a restricted AWS Academy /
+  Voclabs Learner Lab account. LambdaComposition falls back to SQLite in
+  Lambda's /tmp when MYSQL_HOST is unset (ephemeral, demo-only). The
+  production design (persistent MySQL, VPC) lives in template.yaml; see
+  docs/SERVERLESS.md.
+
+Parameters:
+  ExecutionRoleArn:
+    Type: String
+    Description: >
+      ARN of a pre-existing IAM role assumable by lambda.amazonaws.com
+      (Voclabs blocks creating new roles). e.g.
+      arn:aws:iam::<account>:role/lambda-run-role.
+
+Globals:
+  Function:
+    Timeout: 15
+    MemorySize: 512
+    Runtime: java21
+
+Resources:
+  LinkFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: linker1-serverless-demo
+      Handler: linker.serverless.LinkLambdaHandler::handleRequest
+      CodeUri: ../target/linker1-1.0-jar-with-dependencies.jar
+      Role: !Ref ExecutionRoleArn
+      # No VpcConfig and no MYSQL_* env vars -> LambdaComposition uses the
+      # SQLite /tmp fallback, so the demo needs no reachable database.
+      Events:
+        ProxyApi:
+          Type: Api
+          Properties:
+            Path: /{proxy+}
+            Method: ANY
+        RootApi:
+          Type: Api
+          Properties:
+            Path: /
+            Method: ANY
+
+Outputs:
+  ApiUrl:
+    Description: Invoke URL for the serverless linker1 demo deployment.
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/"
+  FunctionArn:
+    Value: !GetAtt LinkFunction.Arn
