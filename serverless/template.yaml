@@ -1,0 +1,82 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Linker1 serverless deployment target (issue #74). Reuses the same
+  linker.LinkService/linker.LinkRepository business logic as the VM
+  deployment (pipeline.yml/bluegreen.yml) via linker.serverless.LinkLambdaHandler
+  -- same source, same fat jar artifact, different entry point. MySQL is the
+  datastore here (Lambda's filesystem is ephemeral, unlike the VM's SQLite
+  file); this is a separate PROD target alongside the VM, not a replacement.
+
+Parameters:
+  MysqlHost:
+    Type: String
+    Description: MySQL host reachable from this Lambda function's VPC config (same backing service the VM target's /healthz already uses).
+  MysqlDatabase:
+    Type: String
+    Default: linker_db_1
+  MysqlUser:
+    Type: String
+    Default: linker_user_1
+  MysqlPassword:
+    Type: String
+    NoEcho: true
+  VpcSubnetIds:
+    Type: CommaDelimitedList
+    Description: >
+      Private subnet IDs the Lambda function attaches to so it can reach
+      MySQL (the same private subnet linker1's VMs already use, TF_SUBNET_ID,
+      works here too -- MySQL is in the same private network).
+  VpcSecurityGroupIds:
+    Type: CommaDelimitedList
+    Description: Security group(s) allowing outbound to MySQL:3306.
+
+Globals:
+  Function:
+    Timeout: 15
+    MemorySize: 512
+    Runtime: java21
+
+Resources:
+  LinkFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: linker1-serverless
+      Handler: linker.serverless.LinkLambdaHandler::handleRequest
+      # Same fat jar `mvn package` already produces for the VM target
+      # (target/linker1-1.0-jar-with-dependencies.jar) -- issue #74's "same
+      # artifact across platforms" requirement. Javalin/Jetty/LaunchDarkly
+      # inside it are unused dead weight for Lambda (cold-start cost, not a
+      # correctness problem) rather than a second, forked build.
+      CodeUri: ../target/linker1-1.0-jar-with-dependencies.jar
+      VpcConfig:
+        SubnetIds: !Ref VpcSubnetIds
+        SecurityGroupIds: !Ref VpcSecurityGroupIds
+      Environment:
+        Variables:
+          MYSQL_HOST: !Ref MysqlHost
+          MYSQL_DATABASE: !Ref MysqlDatabase
+          MYSQL_USER: !Ref MysqlUser
+          MYSQL_PWD: !Ref MysqlPassword
+      Events:
+        # A single ANY + {proxy+} catches every method/path this handler
+        # already routes internally (GET/HEAD/DELETE /{id}, POST /link) --
+        # matches the VM target's own routing being done in application
+        # code (LinkRoutes), not in the web server/gateway layer.
+        ProxyApi:
+          Type: Api
+          Properties:
+            Path: /{proxy+}
+            Method: ANY
+        RootApi:
+          Type: Api
+          Properties:
+            Path: /
+            Method: ANY
+
+Outputs:
+  ApiUrl:
+    Description: Invoke URL for the serverless linker1 deployment (alternate PROD entry point alongside the VM target).
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/"
+  FunctionArn:
+    Value: !GetAtt LinkFunction.Arn

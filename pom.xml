@@ -108,6 +108,16 @@
             <artifactId>opentelemetry-sdk-testing</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>com.amazonaws</groupId>
+            <artifactId>aws-lambda-java-core</artifactId>
+            <version>1.4.0</version>
+        </dependency>
+        <dependency>
+            <groupId>com.amazonaws</groupId>
+            <artifactId>aws-lambda-java-events</artifactId>
+            <version>3.16.1</version>
+        </dependency>
     </dependencies>
     <distributionManagement>
         <repository>
@@ -176,6 +186,7 @@
                         <configuration>
                             <excludes>
                                 <exclude>Main.class</exclude>
+                                <exclude>linker/serverless/LambdaComposition.class</exclude>
                             </excludes>
                             <rules>
                                 <rule>

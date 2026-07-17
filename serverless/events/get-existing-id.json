@@ -1,0 +1,11 @@
+{
+  "httpMethod": "GET",
+  "path": "/example-id",
+  "pathParameters": {
+    "id": "example-id"
+  },
+  "headers": {},
+  "queryStringParameters": null,
+  "body": null,
+  "isBase64Encoded": false
+}

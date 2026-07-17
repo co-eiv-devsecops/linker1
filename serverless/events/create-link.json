@@ -1,0 +1,11 @@
+{
+  "httpMethod": "POST",
+  "path": "/link",
+  "pathParameters": null,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "queryStringParameters": null,
+  "body": "{\"url\":\"https://example.com\"}",
+  "isBase64Encoded": false
+}

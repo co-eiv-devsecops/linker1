@@ -1,0 +1,93 @@
+name: Serverless Deploy (AWS Lambda)
+
+# Deploys linker1's serverless target (issue #74) -- reuses the same fat jar
+# `mvn package` already produces for the VM deployment, just points AWS
+# Lambda at linker.serverless.LinkLambdaHandler inside it instead of
+# starting the embedded Javalin server. This is a SEPARATE PROD entry point
+# alongside the VM/blue-green target (bluegreen.yml), not a replacement --
+# nothing here touches the VM, the load balancer, or OCI_INSTANCE_OCID.
+#
+# workflow_dispatch only: requires real AWS credentials as GitHub secrets,
+# which is a one-time manual setup step (see docs/SERVERLESS.md) -- this
+# never runs automatically on push, so it can't fail an unrelated PR/deploy
+# for a team that hasn't set up an AWS account.
+#
+# Pre-conditions (one-time setup, see docs/SERVERLESS.md):
+#   gh secret set AWS_ACCESS_KEY_ID       --body "..."
+#   gh secret set AWS_SECRET_ACCESS_KEY   --body "..."
+#   gh variable set AWS_REGION            --body "us-east-1"
+#   gh variable set SERVERLESS_MYSQL_HOST --body "<same MySQL host /healthz already uses>"
+#   gh variable set SERVERLESS_VPC_SUBNET_IDS --body "subnet-aaa,subnet-bbb"
+#   gh variable set SERVERLESS_VPC_SG_IDS     --body "sg-ccc"
+#   gh secret set SERVERLESS_MYSQL_PWD    --body "..."
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: serverless-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-deploy:
+    name: Build jar and deploy to AWS Lambda
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      # Same command, same artifact, as the VM target's build -- issue #74's
+      # "same artifact for all platforms" requirement. No serverless-specific
+      # Maven profile or second pom.xml.
+      - name: Build fat jar
+        run: mvn -B -ntp package -DskipTests
+
+      - name: Set up AWS SAM CLI
+        uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: SAM build
+        working-directory: serverless
+        run: sam build --template-file template.yaml
+
+      - name: SAM deploy
+        working-directory: serverless
+        run: |
+          sam deploy \
+            --stack-name linker1-serverless \
+            --resolve-s3 \
+            --capabilities CAPABILITY_IAM \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --parameter-overrides \
+              "MysqlHost=${{ vars.SERVERLESS_MYSQL_HOST }}" \
+              "MysqlDatabase=${{ vars.SERVERLESS_MYSQL_DATABASE || 'linker_db_1' }}" \
+              "MysqlUser=${{ vars.SERVERLESS_MYSQL_USER || 'linker_user_1' }}" \
+              "MysqlPassword=${{ secrets.SERVERLESS_MYSQL_PWD }}" \
+              "VpcSubnetIds=${{ vars.SERVERLESS_VPC_SUBNET_IDS }}" \
+              "VpcSecurityGroupIds=${{ vars.SERVERLESS_VPC_SG_IDS }}"
+
+      - name: Print deployed API URL
+        run: |
+          aws cloudformation describe-stacks \
+            --stack-name linker1-serverless \
+            --query 'Stacks[0].Outputs' \
+            --output table
