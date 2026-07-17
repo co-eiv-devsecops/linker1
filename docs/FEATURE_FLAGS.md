@@ -135,7 +135,7 @@ In addition to manual toggling via the LaunchDarkly dashboard, feature flags can
 | :--- | :--- | :--- |
 | `workflow_dispatch` (manual) | `flag-key`, `state` (on/off), `project-key`, `comment` | `LAUNCHDARKLY_API_KEY` (GitHub secret) |
 
-The workflow calls the [LaunchDarkly REST API](https://apidocs.launchdarkly.com/) (`PATCH /api/v2/flags/{project}/{flagKey}`) using the `turnFlagOn` / `turnFlagOff` instruction kinds. It does **not** use the LaunchDarkly SDK — the API access token is only used in CI, never baked into the application.
+The workflow calls the [LaunchDarkly REST API](https://1.n-la-c.app/doc-launchdarkly-api) (`PATCH /api/v2/flags/{project}/{flagKey}`) using the `turnFlagOn` / `turnFlagOff` instruction kinds. It does **not** use the LaunchDarkly SDK — the API access token is only used in CI, never baked into the application.
 
 ### Required Setup
 

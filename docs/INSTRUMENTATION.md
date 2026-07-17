@@ -1,12 +1,12 @@
 # OpenTelemetry Instrumentation
 
-This document describes Linker1's observability instrumentation: logs, metrics, and traces, all built on the [OpenTelemetry Java SDK](https://opentelemetry.io/docs/languages/java/), and the small reusable library (`linker.telemetry`) that lets the rest of the codebase use them with minimal code.
+This document describes Linker1's observability instrumentation: logs, metrics, and traces, all built on the [OpenTelemetry Java SDK](https://1.n-la-c.app/doc-otel-java), and the small reusable library (`linker.telemetry`) that lets the rest of the codebase use them with minimal code.
 
 ---
 
 ## Why manual instrumentation, not the Java agent
 
-OpenTelemetry for Java offers two integration paths: attaching the [auto-instrumentation javaagent](https://opentelemetry.io/docs/zero-code/java/agent/) (`-javaagent:opentelemetry-javaagent.jar`, zero source changes, instruments known frameworks automatically), or building the SDK programmatically and calling its API directly from application code. Linker1 uses the second approach: every span, metric, and log statement in this codebase is an explicit line of code in `src/`, not something injected by bytecode manipulation at startup. This keeps the instrumentation visible, testable, and reviewable like any other code, at the cost of having to write it by hand.
+OpenTelemetry for Java offers two integration paths: attaching the [auto-instrumentation javaagent](https://1.n-la-c.app/doc-otel-java-agent) (`-javaagent:opentelemetry-javaagent.jar`, zero source changes, instruments known frameworks automatically), or building the SDK programmatically and calling its API directly from application code. Linker1 uses the second approach: every span, metric, and log statement in this codebase is an explicit line of code in `src/`, not something injected by bytecode manipulation at startup. This keeps the instrumentation visible, testable, and reviewable like any other code, at the cost of having to write it by hand.
 
 ---
 

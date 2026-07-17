@@ -1,0 +1,19 @@
+# Documentation links routed through the linker1 shortener (issue #73).
+# Format: alias|target-url
+# Regenerate the short-URL table by running: bash scripts/shorten-doc-links.sh
+
+repo-github|https://github.com/co-eiv-devsecops/linker1
+doc-12factor|https://12factor.net/
+doc-launchdarkly-sdk|https://docs.launchdarkly.com/sdk/server-side/java
+doc-launchdarkly-api|https://apidocs.launchdarkly.com/
+doc-launchdarkly-home|https://launchdarkly.com/
+doc-oci-bastion|https://docs.oracle.com/en-us/iaas/Content/Bastion/home.htm
+doc-grafana-otlp|https://grafana.com/docs/grafana-cloud/send-data/otlp/
+doc-otel-java|https://opentelemetry.io/docs/languages/java/
+doc-otel-java-agent|https://opentelemetry.io/docs/zero-code/java/agent/
+doc-otel-logback-appender|https://github.com/open-telemetry/opentelemetry-java-instrumentation/tree/main/instrumentation/logback/logback-appender-1.0
+doc-sre-postmortems|https://sre.google/sre-book/postmortem-culture/
+doc-systemd-unit|https://www.freedesktop.org/software/systemd/man/systemd.unit.html
+doc-logback|https://logback.qos.ch/
+doc-slf4j|https://www.slf4j.org/
+doc-semver|https://semver.org/

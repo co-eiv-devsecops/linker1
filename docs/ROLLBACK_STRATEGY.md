@@ -2,7 +2,7 @@
 
 ## Context
 
-Linker1 is deployed on an OCI VM via `deploy.sh`, which builds the project directly on the VM (x86_64 architecture) and leaves it running as the `linker1.service` systemd service behind Nginx. Versions are tagged with Git tags following [Semantic Versioning](https://semver.org/) (`vMAJOR.MINOR.PATCH`); every `v*.*.*` tag triggers the `release.yml` workflow, which publishes a GitHub Release with the packaged jar and the launcher script (`scripts/linker1`) as assets.
+Linker1 is deployed on an OCI VM via `deploy.sh`, which builds the project directly on the VM (x86_64 architecture) and leaves it running as the `linker1.service` systemd service behind Nginx. Versions are tagged with Git tags following [Semantic Versioning](https://1.n-la-c.app/doc-semver) (`vMAJOR.MINOR.PATCH`); every `v*.*.*` tag triggers the `release.yml` workflow, which publishes a GitHub Release with the packaged jar and the launcher script (`scripts/linker1`) as assets.
 
 This rollback strategy uses exactly those two mechanisms that already exist (SemVer tags + `deploy.sh`) instead of introducing new infrastructure: rolling back means stopping the service, switching to the code of a previous tag, and rebuilding/restarting with `deploy.sh`.
 
