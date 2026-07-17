@@ -65,25 +65,25 @@ inputs:
 outputs:
   new-private-ip:
     description: Private IP resolved from the new VM primary VNIC.
-    value: ${{ steps.new-private-ip.outputs.raw_output }}
+    value: ${{ steps.resolve.outputs.new-ip }}
   current-private-ip:
     description: Private IP resolved from the current VM primary VNIC.
-    value: ${{ steps.current-private-ip.outputs.raw_output }}
+    value: ${{ steps.resolve.outputs.current-ip }}
   new-backend-name:
     description: OCI backend name for the new VM, normally privateIp:port.
-    value: ${{ steps.backend-names.outputs.new-backend-name }}
+    value: ${{ steps.resolve.outputs.new-backend-name }}
   current-backend-name:
     description: OCI backend name for the current VM, normally privateIp:port.
-    value: ${{ steps.backend-names.outputs.current-backend-name }}
+    value: ${{ steps.resolve.outputs.current-backend-name }}
   health-status:
     description: Last health status observed by wait-* actions.
     value: ${{ steps.wait-backend-health.outputs.health-status }}
   health-check-path:
     description: Health check path currently configured on the backend set.
-    value: ${{ steps.health-checker-path.outputs.raw_output }}
+    value: ${{ steps.resolve.outputs.health-check-path }}
   backend-set-policy:
     description: Load balancing policy currently configured on the backend set.
-    value: ${{ steps.backend-set-policy.outputs.raw_output }}
+    value: ${{ steps.resolve.outputs.backend-set-policy }}
 
 runs:
   using: composite
@@ -129,79 +129,71 @@ runs:
           *) echo "health-check-path must start with /." >&2; exit 1 ;;
         esac
 
-    - name: Resolve new VM compartment
-      id: new-compartment
+    # Installs the OCI CLI (first oci invocation in the job) so the plain-bash
+    # resolve step below can call `oci` directly. Same priming pattern the
+    # oci-bastion-deploy action uses.
+    - name: Prime OCI CLI
       uses: oracle-actions/run-oci-cli-command@v1.3.2
       with:
-        command: 'compute instance get --instance-id ${{ inputs.new-instance-id }}'
-        query: 'data.\"compartment-id\"'
+        command: '--version'
+        silent: 'true'
 
-    - name: Resolve current VM compartment
-      id: current-compartment
-      uses: oracle-actions/run-oci-cli-command@v1.3.2
-      with:
-        command: 'compute instance get --instance-id ${{ inputs.current-instance-id }}'
-        query: 'data.\"compartment-id\"'
-
-    - name: Resolve new VM primary VNIC attachment
-      id: new-vnic-attachment
-      uses: oracle-actions/run-oci-cli-command@v1.3.2
-      with:
-        command: 'compute vnic-attachment list --compartment-id ${{ steps.new-compartment.outputs.raw_output }} --instance-id ${{ inputs.new-instance-id }}'
-        query: 'data[?\"lifecycle-state\"==''ATTACHED''] | [0].\"vnic-id\"'
-
-    - name: Resolve current VM primary VNIC attachment
-      id: current-vnic-attachment
-      uses: oracle-actions/run-oci-cli-command@v1.3.2
-      with:
-        command: 'compute vnic-attachment list --compartment-id ${{ steps.current-compartment.outputs.raw_output }} --instance-id ${{ inputs.current-instance-id }}'
-        query: 'data[?\"lifecycle-state\"==''ATTACHED''] | [0].\"vnic-id\"'
-
-    - name: Resolve new VM private IP
-      id: new-private-ip
-      uses: oracle-actions/run-oci-cli-command@v1.3.2
-      with:
-        command: 'network vnic get --vnic-id ${{ steps.new-vnic-attachment.outputs.raw_output }}'
-        query: 'data.\"private-ip\"'
-
-    - name: Resolve current VM private IP
-      id: current-private-ip
-      uses: oracle-actions/run-oci-cli-command@v1.3.2
-      with:
-        command: 'network vnic get --vnic-id ${{ steps.current-vnic-attachment.outputs.raw_output }}'
-        query: 'data.\"private-ip\"'
-
-    - name: Build backend names
-      id: backend-names
+    # DIVERGES FROM UPSTREAM (material-curso) DELIBERATELY.
+    # Upstream chained six run-oci-cli-command steps, passing each value to the
+    # next via the action's `raw_output` output. That output is EMPTY whenever
+    # a JMESPath query returns a plain string: the action only fills raw_output
+    # for single-key objects (`Object.keys(stdout).length == 1` in its source),
+    # and a JSON string's keys are its character indices. So the compartment
+    # OCID rendered as an empty `--compartment-id` argument and the whole
+    # preflight died with exit 1 -- every string-valued query in the chain
+    # (compartment, vnic-id, private-ip, policy, url-path) had the same bug,
+    # meaning the upstream action could never complete. linker5's working
+    # deployment scripts use exactly this direct `list-vnics --raw-output`
+    # bash approach, which also avoids needing the compartment at all.
+    - name: Resolve backend addressing and health-check config
+      id: resolve
       shell: bash
+      env:
+        NEW_INSTANCE_ID: ${{ inputs.new-instance-id }}
+        CURRENT_INSTANCE_ID: ${{ inputs.current-instance-id }}
+        LOAD_BALANCER_ID: ${{ inputs.load-balancer-id }}
+        BACKEND_SET_NAME: ${{ inputs.backend-set-name }}
+        BACKEND_PORT: ${{ inputs.backend-port }}
       run: |
         set -euo pipefail
-        new_ip="${{ steps.new-private-ip.outputs.raw_output }}"
-        current_ip="${{ steps.current-private-ip.outputs.raw_output }}"
-        port="${{ inputs.backend-port }}"
 
-        if [ -z "$new_ip" ] || [ -z "$current_ip" ]; then
+        new_ip="$(oci compute instance list-vnics --instance-id "$NEW_INSTANCE_ID" \
+          --query 'data[0]."private-ip"' --raw-output)"
+        current_ip="$(oci compute instance list-vnics --instance-id "$CURRENT_INSTANCE_ID" \
+          --query 'data[0]."private-ip"' --raw-output)"
+
+        if [ -z "$new_ip" ] || [ "$new_ip" = "null" ] || [ -z "$current_ip" ] || [ "$current_ip" = "null" ]; then
           echo "Failed to resolve one or both VM private IPs." >&2
           exit 1
         fi
 
-        echo "new-backend-name=${new_ip}:${port}" >> "$GITHUB_OUTPUT"
-        echo "current-backend-name=${current_ip}:${port}" >> "$GITHUB_OUTPUT"
+        policy="$(oci lb backend-set get \
+          --backend-set-name "$BACKEND_SET_NAME" \
+          --load-balancer-id "$LOAD_BALANCER_ID" \
+          --query 'data.policy' --raw-output)"
+        hc_path="$(oci lb health-checker get \
+          --backend-set-name "$BACKEND_SET_NAME" \
+          --load-balancer-id "$LOAD_BALANCER_ID" \
+          --query 'data."url-path"' --raw-output || true)"
 
-    - name: Get backend set policy
-      id: backend-set-policy
-      uses: oracle-actions/run-oci-cli-command@v1.3.2
-      with:
-        command: 'lb backend-set get --backend-set-name "${{ inputs.backend-set-name }}" --load-balancer-id "${{ inputs.load-balancer-id }}"'
-        query: 'data.policy'
+        {
+          echo "new-ip=${new_ip}"
+          echo "current-ip=${current_ip}"
+          echo "new-backend-name=${new_ip}:${BACKEND_PORT}"
+          echo "current-backend-name=${current_ip}:${BACKEND_PORT}"
+          echo "backend-set-policy=${policy}"
+          echo "health-check-path=${hc_path}"
+        } >> "$GITHUB_OUTPUT"
 
-    - name: Get configured health-check path
-      id: health-checker-path
-      if: ${{ inputs.action == 'validate-health-check-path' }}
-      uses: oracle-actions/run-oci-cli-command@v1.3.2
-      with:
-        command: 'lb health-checker get --backend-set-name "${{ inputs.backend-set-name }}" --load-balancer-id "${{ inputs.load-balancer-id }}"'
-        query: 'data.\"url-path\"'
+        echo "new backend:     ${new_ip}:${BACKEND_PORT}"
+        echo "current backend: ${current_ip}:${BACKEND_PORT}"
+        echo "policy:          ${policy}"
+        echo "hc url-path:     ${hc_path}"
 
     - name: Validate health-check path
       if: ${{ inputs.action == 'validate-health-check-path' }}
@@ -209,8 +201,8 @@ runs:
       run: |
         set -euo pipefail
         expected="${{ inputs.health-check-path }}"
-        actual="${{ steps.health-checker-path.outputs.raw_output }}"
-        policy="${{ steps.backend-set-policy.outputs.raw_output }}"
+        actual="${{ steps.resolve.outputs.health-check-path }}"
+        policy="${{ steps.resolve.outputs.backend-set-policy }}"
 
         if [ -z "$actual" ] || [ "$actual" = "null" ]; then
           echo "Backend set health checker does not expose a URL path. This action expects an HTTP or HTTPS health check." >&2
@@ -232,7 +224,7 @@ runs:
       env:
         LOAD_BALANCER_ID: ${{ inputs.load-balancer-id }}
         BACKEND_SET_NAME: ${{ inputs.backend-set-name }}
-        NEW_BACKEND_NAME: ${{ steps.backend-names.outputs.new-backend-name }}
+        NEW_BACKEND_NAME: ${{ steps.resolve.outputs.new-backend-name }}
       run: |
         set -euo pipefail
 
@@ -255,7 +247,7 @@ runs:
         command: >-
           lb backend create
           --backend-set-name "${{ inputs.backend-set-name }}"
-          --ip-address "${{ steps.new-private-ip.outputs.raw_output }}"
+          --ip-address "${{ steps.resolve.outputs.new-ip }}"
           --load-balancer-id "${{ inputs.load-balancer-id }}"
           --port ${{ inputs.backend-port }}
           --backup false
@@ -273,7 +265,7 @@ runs:
       with:
         command: >-
           lb backend update
-          --backend-name "${{ steps.backend-names.outputs.new-backend-name }}"
+          --backend-name "${{ steps.resolve.outputs.new-backend-name }}"
           --backend-set-name "${{ inputs.backend-set-name }}"
           --load-balancer-id "${{ inputs.load-balancer-id }}"
           --backup false
@@ -292,8 +284,8 @@ runs:
         LOAD_BALANCER_ID: ${{ inputs.load-balancer-id }}
         BACKEND_SET_NAME: ${{ inputs.backend-set-name }}
         ACTION_NAME: ${{ inputs.action }}
-        NEW_BACKEND_NAME: ${{ steps.backend-names.outputs.new-backend-name }}
-        CURRENT_BACKEND_NAME: ${{ steps.backend-names.outputs.current-backend-name }}
+        NEW_BACKEND_NAME: ${{ steps.resolve.outputs.new-backend-name }}
+        CURRENT_BACKEND_NAME: ${{ steps.resolve.outputs.current-backend-name }}
         ATTEMPTS: ${{ inputs.health-wait-attempts }}
         SLEEP_SECONDS: ${{ inputs.health-wait-seconds }}
       run: |
@@ -346,7 +338,7 @@ runs:
       with:
         command: >-
           lb backend update
-          --backend-name "${{ steps.backend-names.outputs.current-backend-name }}"
+          --backend-name "${{ steps.resolve.outputs.current-backend-name }}"
           --backend-set-name "${{ inputs.backend-set-name }}"
           --load-balancer-id "${{ inputs.load-balancer-id }}"
           --backup false
@@ -364,7 +356,7 @@ runs:
       with:
         command: >-
           lb backend update
-          --backend-name "${{ steps.backend-names.outputs.new-backend-name }}"
+          --backend-name "${{ steps.resolve.outputs.new-backend-name }}"
           --backend-set-name "${{ inputs.backend-set-name }}"
           --load-balancer-id "${{ inputs.load-balancer-id }}"
           --backup false
@@ -382,7 +374,7 @@ runs:
       with:
         command: >-
           lb backend update
-          --backend-name "${{ steps.backend-names.outputs.new-backend-name }}"
+          --backend-name "${{ steps.resolve.outputs.new-backend-name }}"
           --backend-set-name "${{ inputs.backend-set-name }}"
           --load-balancer-id "${{ inputs.load-balancer-id }}"
           --backup false
@@ -400,7 +392,7 @@ runs:
       with:
         command: >-
           lb backend update
-          --backend-name "${{ steps.backend-names.outputs.current-backend-name }}"
+          --backend-name "${{ steps.resolve.outputs.current-backend-name }}"
           --backend-set-name "${{ inputs.backend-set-name }}"
           --load-balancer-id "${{ inputs.load-balancer-id }}"
           --backup false
@@ -418,7 +410,7 @@ runs:
       with:
         command: >-
           lb backend update
-          --backend-name "${{ steps.backend-names.outputs.current-backend-name }}"
+          --backend-name "${{ steps.resolve.outputs.current-backend-name }}"
           --backend-set-name "${{ inputs.backend-set-name }}"
           --load-balancer-id "${{ inputs.load-balancer-id }}"
           --backup false
@@ -436,7 +428,7 @@ runs:
       with:
         command: >-
           lb backend update
-          --backend-name "${{ steps.backend-names.outputs.new-backend-name }}"
+          --backend-name "${{ steps.resolve.outputs.new-backend-name }}"
           --backend-set-name "${{ inputs.backend-set-name }}"
           --load-balancer-id "${{ inputs.load-balancer-id }}"
           --backup false
@@ -454,7 +446,7 @@ runs:
       with:
         command: >-
           lb backend delete
-          --backend-name "${{ steps.backend-names.outputs.new-backend-name }}"
+          --backend-name "${{ steps.resolve.outputs.new-backend-name }}"
           --backend-set-name "${{ inputs.backend-set-name }}"
           --load-balancer-id "${{ inputs.load-balancer-id }}"
           --force
@@ -467,7 +459,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        echo "New backend is already absent: ${{ steps.backend-names.outputs.new-backend-name }}"
+        echo "New backend is already absent: ${{ steps.resolve.outputs.new-backend-name }}"
 
     - name: Print backend status
       id: status
@@ -476,8 +468,8 @@ runs:
       env:
         LOAD_BALANCER_ID: ${{ inputs.load-balancer-id }}
         BACKEND_SET_NAME: ${{ inputs.backend-set-name }}
-        NEW_BACKEND_NAME: ${{ steps.backend-names.outputs.new-backend-name }}
-        CURRENT_BACKEND_NAME: ${{ steps.backend-names.outputs.current-backend-name }}
+        NEW_BACKEND_NAME: ${{ steps.resolve.outputs.new-backend-name }}
+        CURRENT_BACKEND_NAME: ${{ steps.resolve.outputs.current-backend-name }}
       run: |
         set -euo pipefail
 
