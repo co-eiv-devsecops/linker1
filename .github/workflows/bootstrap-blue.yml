@@ -94,7 +94,7 @@ jobs:
             --load-balancer-id "${{ vars.OCI_LB_OCID }}"
             --backend-set-name "${{ vars.OCI_LB_LINKER_BACKEND }}"
             --ip-address "${{ steps.tf-output.outputs.private_ip }}"
-            --port 80
+            --port 8080
             --drain false
             --offline false
             --weight 100
@@ -108,7 +108,10 @@ jobs:
         env:
           LB_OCID:      ${{ vars.OCI_LB_OCID }}
           BACKEND_SET:  ${{ vars.OCI_LB_LINKER_BACKEND }}
-          BACKEND_NAME: ${{ steps.tf-output.outputs.private_ip }}:80
+          # 8080 = the app port, matching the backend-set's health-checker config
+          # (the LB probes 8080 directly; registering on 80 while the checker
+          # probes 8080 is how the first bootstrap ended up permanently CRITICAL).
+          BACKEND_NAME: ${{ steps.tf-output.outputs.private_ip }}:8080
         run: |
           set -euo pipefail
           attempts=40

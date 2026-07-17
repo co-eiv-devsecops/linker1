@@ -8,7 +8,7 @@ New versions of linker1 are now deployed as a **green VM** alongside the running
 
 Triggered on every push to `main` and via `workflow_dispatch`.
 
-```
+```text
 push to main
     │
     ▼
@@ -72,7 +72,9 @@ gh variable set OCI_INSTANCE_OCID     --body "<current-blue-vm-ocid>"
 
 ### Health check
 
-`/healthz` is the real health endpoint (runs `SELECT 1` against MySQL).  It is passed to the reusable workflow as `health-check-path: /healthz`.  The OCI LB must be configured with `/healthz` as its health-check URL path; the `preflight` job validates this before doing anything else.  See [`HEALTHCHECK.md`](HEALTHCHECK.md) for endpoint details.
+The shared LB's `linker-1` backend set is configured with health-checker **port 8080, url-path `/`** (verified via `oci lb backend-set get`). Backends are therefore registered on port 8080 (the app port, bypassing nginx), and the reusable workflow is called with `health-check-path: /` so its `preflight` validation matches the LB's real config. The app's own `/healthz` endpoint (runs `SELECT 1` against MySQL, see [`HEALTHCHECK.md`](HEALTHCHECK.md)) remains the Grafana Synthetic Monitoring target — keeping the LB check on `/` deliberately avoids coupling LB backend health to MySQL reachability.
+
+**Host firewall, critical**: OCI Ubuntu images ship an iptables INPUT chain that REJECTs all inbound traffic except SSH. `infra/cloud-init.yaml` opens 8080 and 80 and persists the rules — without this, the LB health check reports `Critical - Connection failed` even though the app is fully up (curl from the VM itself succeeds via loopback, which makes this brutally misleading to debug). This exact gotcha, plus registering the backend on port 80 while the health checker probes 8080, is what kept the first recreated VM permanently CRITICAL in July 2026; the fix pattern was found in linker5's cloud-init, which documents the same symptom.
 
 ### Failure paths
 
