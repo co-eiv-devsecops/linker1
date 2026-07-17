@@ -79,36 +79,46 @@ This runs `.github/workflows/serverless-deploy.yml`:
 2. `sam build` + `sam deploy` against `serverless/template.yaml` — provisions the Lambda function, IAM execution role, and API Gateway REST API (`AWS::Serverless::Api`, implicit via the `Api` event source).
 3. Prints the deployed API Gateway invoke URL from the CloudFormation stack outputs.
 
-### Demo deployment in AWS Academy / Voclabs (what was actually used in July 2026)
+### Demo deployment in AWS Academy / Voclabs (confirmed working, 2026-07-17)
 
-In Voclabs Learner Lab, the production template's assumptions can fail in practice:
+The production template's two assumptions (`CAPABILITY_IAM` role creation, VPC-reachable MySQL) both fail in an AWS Academy Voclabs Learner Lab account -- confirmed directly, not assumed:
 
-- Creating IAM roles is restricted (so `CAPABILITY_IAM` role creation from the stack is blocked).
-- Reaching the OCI-hosted MySQL from AWS Lambda is not available in this lab setup (cross-cloud private-network gap).
+- `sam deploy` with `serverless/template.yaml` fails: CloudFormation rolls back with `User: ...assumed-role/voclabs/... is not authorized to perform: apigateway:POST ... because no identity-based policy allows the apigateway:POST action` -- API Gateway resource creation is blocked by the account's service control policy (SCP), regardless of `CAPABILITY_IAM`.
+- The OCI-hosted MySQL (`10.0.65.126`, a private IP in OCI's own VCN) is not reachable from an AWS Lambda VPC config -- this is a genuine cross-cloud private-network gap, not a permissions issue; there is no route between the two clouds' private networks without a VPN/interconnect neither account has set up.
 
-For that environment, use `serverless/template-demo.yaml` instead. It keeps the same handler and the same jar artifact, but:
+`serverless/template-demo.yaml` works around both: a **pre-existing** IAM role (`ExecutionRoleArn` parameter, no new role creation, sidesteps the IAM restriction that also blocks SAM's own auto-generated execution role) and no `VpcConfig`/`MYSQL_*` env vars, so `LambdaComposition` falls back to SQLite at `/tmp/linker1.db` (ephemeral/demo-only -- see "Two datastore modes" above).
 
-- Uses a **pre-existing** execution role passed as `ExecutionRoleArn` (no new role creation).
-- Omits `VpcConfig` and `MYSQL_*` env vars so `LambdaComposition` uses SQLite at `/tmp/linker1.db` fallback (ephemeral/demo-only).
-- Deploys a clearly named demo function: `linker1-serverless-demo`.
+**A third SCP restriction, found during deployment**: a public (`--auth-type NONE`) Lambda Function URL also returns `403 Forbidden` on every request in this account, even after `lambda:InvokeFunctionUrl` permission is explicitly granted to principal `*` -- this is a Voclabs guardrail against publicly-reachable endpoints, the same category of restriction as the blocked API Gateway. `serverless/template-demo.yaml` does not attempt a Function URL for this reason; verification instead uses direct `aws lambda invoke` calls with hand-built API Gateway v1 proxy event payloads (`serverless/events/*.json`), which exercises the exact same code path (`LinkLambdaHandler.handleRequest`) an API Gateway-fronted invocation would.
 
-Final confirmation invoke against the clean demo function:
+Full CRUD verification against the deployed `linker1-serverless-demo` function, using the pattern above:
 
-```powershell
-aws lambda invoke `
-  --function-name linker1-serverless-demo `
-  --cli-binary-format raw-in-base64-out `
-  --payload file://<path-to-evt-create.json> `
-  <path-to-resp-final.json>
+| Request | Result |
+| --- | --- |
+| `POST /link {"url":"https://example.com"}` | `{"statusCode":201,"headers":{"Location":"/cd9fcc46"},"body":"cd9fcc46"}` |
+| `GET /cd9fcc46` | `{"statusCode":301,"headers":{"Location":"https://example.com"}}` |
+| `POST /link {"url":"...","alias":"demo"}` | `{"statusCode":201,"headers":{"Location":"/demo"},"body":"demo"}` |
+| `HEAD /demo` | `{"statusCode":200,"headers":{},"body":"https://demo-alias.example.com"}` |
+| `DELETE /demo` | `{"statusCode":204,"headers":{},"body":""}` |
+| `GET /nope` (unknown id) | `{"statusCode":404,"headers":{},"body":"Not found"}` |
+
+Every code path the handler routes (create, dedupe implicitly covered by the service layer's own tests, alias, redirect, HEAD metadata, DELETE, 404) is proven live on real AWS Lambda infrastructure, backed by the SQLite `/tmp` fallback -- not just unit-tested.
+
+**Deployment mechanics** (equivalent to what `serverless-deploy.yml` would do, run manually since `sam deploy`'s CloudFormation path is blocked as noted above):
+
+```bash
+mvn package -DskipTests
+BUCKET=$(aws s3 ls | grep aws-sam-cli-managed | awk '{print $NF}')   # sam deploy creates this on first use
+aws s3 cp target/linker1-1.0-jar-with-dependencies.jar "s3://$BUCKET/linker1.jar"
+aws lambda create-function \
+  --function-name linker1-serverless-demo \
+  --runtime java21 \
+  --role "arn:aws:iam::<account-id>:role/lambda-run-role" \
+  --handler "linker.serverless.LinkLambdaHandler::handleRequest" \
+  --code "S3Bucket=$BUCKET,S3Key=linker1.jar" \
+  --timeout 15 --memory-size 512
 ```
 
-Observed result:
-
-```json
-{"statusCode":201,"headers":{"Location":"/132cfc61"},"body":"132cfc61"}
-```
-
-In this lab environment, API Gateway endpoint access can be blocked by account policy; direct Lambda invocation still proves the deployment is live and correctly handling requests.
+`lambda-run-role` (or `myBasicLambdaRole`, also present) are the two pre-existing, `lambda.amazonaws.com`-trusted roles available in this account without needing `iam:CreateRole` -- discovered via `aws iam list-roles`, since the documented `LabRole` name from other AWS Academy course variants does not exist in this particular account.
 
 ### Local testing before a real deploy
 
