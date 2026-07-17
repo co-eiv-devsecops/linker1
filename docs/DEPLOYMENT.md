@@ -195,13 +195,33 @@ Already configured in the repository (verified in Settings > Secrets and variabl
 | `OCI_CLI_FINGERPRINT` | secret | repo | OCI CLI authentication |
 | `OCI_CLI_KEY_CONTENT` | secret | repo | Private key of the OCI API key |
 | `OCI_CLI_REGION` | variable | organization | OCI region (`sa-bogota-1`) |
-| `OCI_BASTION_OCID` | variable | organization | OCI Bastion used for the managed SSH session |
+| `OCI_BASTION_OCID` | variable | **repo** (see note below) | OCI Bastion used for the managed SSH session |
 | `DEPLOYMENT_PRIVATE_KEY` | secret | repo | SSH private key the action uses to connect through the bastion |
 | `DEPLOYMENT_PUBLIC_KEY` | secret | repo | The matching public key, authorized on the bastion session |
 | `LD_SDK_KEY` | secret | repo | Already used by `ci.yml`'s `smoke` job; reused for prod's `systemd` unit |
 | `OCI_INSTANCE_OCID` | variable | repo | OCID of `vm-linker1-app`, obtained via `oci compute instance list --compartment-id $CMP_ID` from Cloud Shell (the VM wasn't created with Terraform, so `terraform output` doesn't work for this) |
 
 Note: `DEPLOYMENT_PUBLIC_KEY` is a **secret**, not a variable, even though the instructor's original template referenced it as `vars.DEPLOYMENT_PUBLIC_KEY` — `pipeline.yml` was already adjusted to read it as `secrets.DEPLOYMENT_PUBLIC_KEY`.
+
+**`OCI_BASTION_OCID` moved from organization-level to repo-level (2026-07-17)**: this variable was originally an organization variable, and worked as such through at least PR #91. Sometime around 2026-07-11–15 it started resolving empty in every workflow that reads it (`pipeline.yml`'s `deploy-prod`/`rollback`, and later `bluegreen.yml`'s `functional-test-green`) — confirmed via a diagnostic step printing the variable's length, not just observing the downstream `400 InvalidParameter` from `bastion session create-managed-ssh`. Neither the repo-level Settings > Secrets and variables > Actions > Variables page nor the org-level `github.com/organizations/co-eiv-devsecops/settings/variables/actions` page showed any way to fix this from the team's access level (the org-level page isn't even reachable without org-admin permissions, which nobody on the team has) — most likely the variable's "repository access" allow-list on the org side stopped including `linker1`, or it was deleted/recreated without re-sharing it.
+
+**Workaround (not a root-cause fix)**: since repo-level variables take priority over an org-level variable of the same name, setting `OCI_BASTION_OCID` directly on this repo bypasses the inaccessible org-level one entirely, with no workflow YAML changes needed (`vars.OCI_BASTION_OCID` already resolves the repo-level value first). The actual Bastion OCID was located by searching every compartment in the tenancy, since it isn't in `TF_COMPARTMENT_ID` (the team's own compartment) or either of the two `*network*`-named compartments:
+
+```bash
+TENANCY_ID=$(oci iam compartment list --all --query 'data[0]."compartment-id"' --raw-output)
+for cmp in "$TENANCY_ID" $(oci iam compartment list --compartment-id-in-subtree true --all --query 'data[].id' --raw-output | tr -d '[]" ' | tr ',' '\n'); do
+  result=$(oci bastion bastion list --compartment-id "$cmp" --query 'data[].{name:name, id:id}' --output table 2>/dev/null)
+  [ -n "$result" ] && echo "=== FOUND in $cmp ===" && echo "$result"
+done
+```
+
+Found: `bstlinkerprojects` in a compartment separate from `TF_COMPARTMENT_ID`. Set via:
+
+```bash
+gh variable set OCI_BASTION_OCID --body "ocid1.bastion.oc1.sa-bogota-1...."
+```
+
+If this variable ever needs to be re-pointed at a different Bastion (or the org-level one gets fixed and someone wants to remove the repo-level override), the same search loop above will re-locate it.
 
 There is also an `OCI_VM_SSHKEY_CONTENT` secret in the repo that isn't used by this pipeline or the instructor's template — it was left untouched, unused until it's identified what it was for.
 
