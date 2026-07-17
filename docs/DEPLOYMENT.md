@@ -21,6 +21,16 @@ push to main
     uploads terraform.tfstate as artifact for failure cleanup
     │
     ▼
+[functional-test-green]  ── the ephemeral test environment (#72)
+    opens an OCI Bastion managed-SSH session to the green VM (no public IP)
+    tunnels localhost:18080 -> green VM's 8080 through that session
+    k6 run tests/k6/switchover-checks.js  (static assets, CRUD, alias,
+      redirects, HEAD/DELETE -- the same scenarios as postman/linker1.postman_collection.json)
+    if K6_CLOUD_TOKEN/K6_CLOUD_PROJECT_ID are set: --out cloud, results
+      appear in Grafana Cloud under Testing & synthetics -> Performance testing
+    ──── on failure: green VM never reaches the LB at all ────
+    │
+    ▼
 [blue-green-lb-deploy]  (calls oci-lb-bluegreen-ab.yml@main)
     preflight: validate /healthz is the configured health-check path
     stage_green_backend: add green VM to LB with drain=true
@@ -36,9 +46,47 @@ push to main
     │                 gh variable set OCI_INSTANCE_OCID = <green-ocid>
     │
     └── failure ──▶ [teardown-green-on-failure]
+                      (fires if EITHER functional-test-green OR
+                       blue-green-lb-deploy fails)
                       terraform destroy (using saved state artifact)
                       Blue VM untouched, OCI_INSTANCE_OCID unchanged
 ```
+
+### Switchover runbook (issue #72)
+
+The green VM is the "entorno efímero de pruebas": it only earns real production traffic if it passes every stage below, in order. Nothing here is a manual step — the whole sequence runs unattended on every push to `main`.
+
+1. **Create green** — `provision-green` runs `terraform apply` against `infra/main.tf` with a run-scoped `instance_display_name`, producing a brand-new VM independent of blue. Its Terraform state is uploaded as an artifact so a later failure can `terraform destroy` it without needing to re-derive which VM to delete.
+2. **Functional tests** — `functional-test-green` (see below) exercises the actual application on the green VM directly — not through the load balancer, and not just "does the port answer" (which is all an OCI LB health check proves). This is the real gate: a failing test here is treated exactly like a failing health check, and the green VM is destroyed before it ever reaches the load balancer.
+3. **Health check** — `blue-green-lb-deploy`'s `preflight`/`stage_green_backend`/`verify_green_health` jobs register green as a **drained** (zero-traffic) backend and poll OCI's own LB health check (port 8080, path `/`) until it reports OK.
+4. **A/B observation** — `start_ab_test` shifts 10% of live traffic to green for a 60-second `observe_ab_test` window, then `verify_ab_health` confirms both backends are still healthy under real traffic before committing further.
+5. **Promote or rollback** — `promote_green` shifts 100% of traffic to green and drains blue. Any failure at any point in steps 2-5 triggers the reusable workflow's own `rollback-to-current` (LB side, restores blue to 100%) and this workflow's `teardown-green-on-failure` (VM side, `terraform destroy`s green) — blue is never touched by a failed deploy.
+6. **Destroy old** — only after promotion succeeds does `teardown-blue-on-success` terminate the now-idle blue VM and repoint `OCI_INSTANCE_OCID` at green for the next cycle.
+
+#### `functional-test-green`: how it reaches a VM with no public IP
+
+`infra/main.tf` sets `create_vnic_details.assign_public_ip = false` on every VM (blue and green alike) — this GitHub-hosted runner has no direct network path to the green VM's private IP. The job:
+
+1. Opens an OCI Bastion **managed-SSH** session against the green VM (`oci bastion session create-managed-ssh`, same primitive `actions/oci-bastion-deploy` uses for deploys — see the [legacy pipeline section](#jobs-in-githubworkflowspipelineyml) below).
+2. Takes the session's own `ssh-metadata.command` (OCI hands back a ready-to-use `ssh -i <privateKey> -o ProxyCommand=... user@host` string) and appends `-N -L 18080:localhost:8080` to turn it into a **local port-forward** instead of an interactive shell — `localhost:8080` from the green VM's own perspective is where nginx/the app already listen.
+3. Runs `k6 run tests/k6/switchover-checks.js` against `http://localhost:18080` on the runner itself (not on the VM) — k6 stays off the production VM image entirely, and running it on the runner means `k6 run --out cloud` can still reach Grafana Cloud k6 directly to publish results.
+4. Tears down the tunnel and the Bastion session unconditionally (`trap ... EXIT`), regardless of whether the tests passed.
+
+**Required for Grafana Cloud k6 result upload** (optional — the step degrades to local-only k6 with a warning if unset, doesn't block the deploy):
+
+| Name | Type | Level | Use |
+| --- | --- | --- | --- |
+| `K6_CLOUD_TOKEN` | secret | repo | Grafana Cloud k6 API token — Grafana Cloud UI: **Testing & synthetics → Performance testing → Settings → API token** (or the stack's API Keys page, `Viewer`/`k6` role) |
+| `K6_CLOUD_PROJECT_ID` | variable | repo | The k6 Cloud project ID results should upload into — same Settings page, or use the stack's "Default project" ID |
+
+```bash
+gh secret set K6_CLOUD_TOKEN --body "<token from Grafana Cloud k6 settings>"
+gh variable set K6_CLOUD_PROJECT_ID --body "<project id>"
+```
+
+Without these, `functional-test-green` still runs and still gates the deploy correctly — it just runs `k6 run` locally on the GitHub runner instead of `k6 run --out cloud`, so results won't show up under Grafana's **Testing & synthetics** view. (Note: Grafana's separate **Agentic testing** feature under that same sidebar section is an interactive AI browser-test-authoring tool with no CI/API integration — it cannot be populated from this or any pipeline. **Performance testing**, which k6 Cloud results feed, is the sibling feature this job targets instead.)
+
+**Confirmed blocked by org policy on the shared course stack (2026-07-16)**: creating a k6 Cloud environment variable/token on `coralavocado2395` fails with `403 You do not have permission to perform this action` (`POST .../grafana-agentictesting-app/resources/k6/v3/organizations/.../envvars`) — same org-admin-only wall as `GRAFANA_CLOUD_API_KEY` (see [`MONITORING.md`](MONITORING.md#post-deploy-automated-check-bonus)). Neither is fixable from the team side; both need an org admin on the Grafana Cloud account to either grant Editor/Admin access or hand over a token directly. Until then, `functional-test-green` runs in its degraded (local-only, no cloud upload) mode by design — this is not a bug, just an unmet optional dependency.
 
 ### Required secrets and variables — Blue/Green
 

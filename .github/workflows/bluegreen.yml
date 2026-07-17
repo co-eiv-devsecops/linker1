@@ -128,7 +128,105 @@ jobs:
           # Retain long enough to cover any manual cleanup window.
           retention-days: 7
 
-  # ── 3. Blue/green LB deploy ───────────────────────────────────────────────
+  # ── 3. Functional tests against the ephemeral green VM ───────────────────
+  # The green VM is the "entorno efímero de pruebas" (#72): it only earns
+  # real traffic if it passes. This runs the k6 suite directly against the
+  # VM's private IP:port -- not through the load balancer -- so it exercises
+  # the app itself, not just "does something answer on this port" (which is
+  # all the LB's own health check proves). A failure here is the same
+  # severity as a failed health check: it blocks the LB deploy entirely and
+  # the green VM gets destroyed (job 4b) without ever receiving production
+  # traffic.
+  functional-test-green:
+    name: Functional tests on green VM
+    needs: provision-green
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install k6
+        run: |
+          curl -sSL https://github.com/grafana/k6/releases/download/v1.0.0/k6-v1.0.0-linux-amd64.tar.gz \
+            | tar xz --strip-components 1 -C /usr/local/bin k6-v1.0.0-linux-amd64/k6
+
+      - name: Prime OCI CLI
+        uses: oracle-actions/run-oci-cli-command@v1.3.2
+        with:
+          command: '--version'
+          silent: 'true'
+
+      # The green VM has no public IP (create_vnic_details.assign_public_ip
+      # = false in infra/main.tf), so this GitHub-hosted runner can't reach
+      # it directly. Opens the same kind of Bastion managed-SSH session used
+      # for deploys (actions/oci-bastion-deploy's create-managed-ssh call),
+      # then reuses its returned ssh-metadata.command as a local port-forward
+      # (-L) instead of an interactive shell -- k6 itself still runs here on
+      # the runner against localhost:18080, so `k6 run --out cloud` can also
+      # reach Grafana Cloud k6 to publish results. Tunnel and session are
+      # both self-contained to this one step so their lifetime can't leak
+      # into other steps or jobs.
+      - name: Run functional tests against green VM (via Bastion tunnel)
+        env:
+          DEPLOYMENT_PUBLIC_KEY:  ${{ secrets.DEPLOYMENT_PUBLIC_KEY }}
+          DEPLOYMENT_PRIVATE_KEY: ${{ secrets.DEPLOYMENT_PRIVATE_KEY }}
+          OCI_BASTION_OCID:       ${{ vars.OCI_BASTION_OCID }}
+          TARGET_INSTANCE_ID:     ${{ needs.provision-green.outputs.green-instance-id }}
+          K6_CLOUD_TOKEN:         ${{ secrets.K6_CLOUD_TOKEN }}
+          K6_CLOUD_PROJECT_ID:    ${{ vars.K6_CLOUD_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+
+          work_dir="$(mktemp -d)"
+          pub_key="$work_dir/session.pub"
+          priv_key="$work_dir/session.key"
+          printf '%s\n' "$DEPLOYMENT_PUBLIC_KEY" > "$pub_key"
+          printf '%s\n' "$DEPLOYMENT_PRIVATE_KEY" > "$priv_key"
+          chmod 600 "$priv_key"
+
+          session_id="$(oci bastion session create-managed-ssh \
+            --bastion-id "$OCI_BASTION_OCID" \
+            --ssh-public-key-file "$pub_key" \
+            --target-resource-id "$TARGET_INSTANCE_ID" \
+            --target-os-username ubuntu \
+            --target-port 22 \
+            --key-type PUB \
+            --session-ttl 1800 \
+            --wait-for-state SUCCEEDED \
+            --wait-interval-seconds 10 \
+            --query 'data.resources[?"entity-type"==`SessionResource` && "action-type"==`CREATED`].identifier | [0]' \
+            --raw-output)"
+          echo "Bastion session: $session_id"
+          trap 'oci bastion session delete --session-id "$session_id" --force || true' EXIT
+
+          # ssh-metadata.command looks like:
+          #   ssh -i <privateKey> -o ProxyCommand="ssh ... -W %h:%p -p 22 <session>@host.bastion.<region>.oci.oraclecloud.com" -p 22 -o ... ubuntu@10.x.x.x
+          # Substitute the real key path for the literal "<privateKey>" token
+          # and reuse the command verbatim rather than re-deriving the
+          # Bastion hostname/session-user format ourselves.
+          ssh_command="$(oci bastion session get --session-id "$session_id" \
+            --query 'data."ssh-metadata".command' --raw-output)"
+          ssh_command="${ssh_command//<privateKey>/$priv_key}"
+
+          # Turn the interactive command into a backgrounded local tunnel:
+          # -N (no remote command) + -L (forward 18080 -> green VM's 8080).
+          eval "$ssh_command -N -L 18080:localhost:8080 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$work_dir/known_hosts &"
+          tunnel_pid=$!
+          trap 'kill "$tunnel_pid" 2>/dev/null || true; oci bastion session delete --session-id "$session_id" --force || true' EXIT
+
+          for i in $(seq 1 20); do
+            curl -sf http://localhost:18080/ > /dev/null 2>&1 && break
+            sleep 3
+          done
+
+          if [ -n "${K6_CLOUD_TOKEN:-}" ] && [ -n "${K6_CLOUD_PROJECT_ID:-}" ]; then
+            TARGET_URL=http://localhost:18080 k6 run --out cloud tests/k6/switchover-checks.js
+          else
+            echo "::warning::K6_CLOUD_TOKEN/K6_CLOUD_PROJECT_ID not set -- running k6 locally only, results won't appear in Grafana Cloud (see docs/DEPLOYMENT.md)."
+            TARGET_URL=http://localhost:18080 k6 run tests/k6/switchover-checks.js
+          fi
+
+  # ── 4. Blue/green LB deploy ────────────────────────────────────────────────
   # Delegates the full blue/green + A/B lifecycle to the teacher's reusable
   # workflow.  Job sequence inside the callee:
   #   preflight → stage_green_backend (drain=true) → verify_green_health
@@ -138,7 +236,7 @@ jobs:
   # surfacing a failed result here.
   blue-green-lb-deploy:
     name: Blue/green LB deploy
-    needs: provision-green
+    needs: [provision-green, functional-test-green]
     # Vendored locally (.github/workflows/oci-lb-bluegreen-ab.yml) instead of
     # `uses: co-eiv-devsecops/material-curso/...@main` -- the org restricted
     # cross-repo Actions access to material-curso sometime after 2026-07-11,
@@ -241,14 +339,20 @@ jobs:
           echo "Blue VM state after terminate request: $state"
 
   # ── 4b. Tear down green VM on failure ─────────────────────────────────────
-  # The reusable workflow already handled the LB side (rollback-to-current +
-  # remove-new-backend).  This job destroys the OCI compute instance so it
-  # doesn't keep running and accruing cost.  The blue VM is untouched and
-  # continues serving 100% traffic.
+  # Covers two failure paths:
+  #   1. functional-test-green fails -> blue-green-lb-deploy is skipped
+  #      entirely (its `needs` never runs) -- the green VM never reaches the
+  #      LB and needs cleanup here directly.
+  #   2. blue-green-lb-deploy itself fails -- it already handled the LB side
+  #      (rollback-to-current + remove-new-backend); this job just destroys
+  #      the OCI compute instance so it doesn't keep accruing cost.
+  # Either way the blue VM is untouched and continues serving 100% traffic.
   teardown-green-on-failure:
     name: Destroy green VM after failed deploy
-    needs: [provision-green, blue-green-lb-deploy]
-    if: ${{ always() && needs.provision-green.result == 'success' && needs.blue-green-lb-deploy.result == 'failure' }}
+    needs: [provision-green, functional-test-green, blue-green-lb-deploy]
+    if: >-
+      ${{ always() && needs.provision-green.result == 'success' &&
+          (needs.functional-test-green.result == 'failure' || needs.blue-green-lb-deploy.result == 'failure') }}
     runs-on: ubuntu-latest
     env:
       TF_VAR_region:                       ${{ vars.OCI_CLI_REGION || 'sa-bogota-1' }}
