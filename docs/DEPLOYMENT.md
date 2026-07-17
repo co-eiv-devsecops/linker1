@@ -147,6 +147,28 @@ In all failure cases: blue VM keeps 100% traffic, `OCI_INSTANCE_OCID` is unchang
 
   (The workflow logs the OCID it tried to set right before the 403, in the `BLUE_OCID`/`green-instance-id` output — copy it from there.) The proper fix, if an org admin becomes available, is either flipping the org policy or creating a PAT with `repo` scope stored as `secrets.GH_PAT` and swapping it in for `secrets.GITHUB_TOKEN` in that one step (a PAT's permissions aren't subject to this same org-level workflow-token ceiling).
 
+  **Gotcha when manually repointing this variable while another run might be in flight**: on 2026-07-17, `OCI_INSTANCE_OCID` was manually repointed at the then-current blue VM shortly before an *already-running* `bluegreen.yml` invocation reached its own `teardown-blue-on-success` step. That run's own logic correctly promoted its green VM and terminated whatever `OCI_INSTANCE_OCID` pointed at *at that moment* — which was the VM just manually set, not stale drift. The `verify-current-instance` guard (see below) then correctly failed on the *next* run, because the variable was pointing at a VM a completed, successful deploy had legitimately just retired. This looked identical to real drift but wasn't — always check `oci compute instance list --all` sorted by `time-created` for a very recent `RUNNING` instance before assuming a `TERMINATED` result means the variable is stale versus "a deploy just finished and correctly moved on."
+
+### Guard: `verify-current-instance` job
+
+`bluegreen.yml`'s `verify-current-instance` job (runs right after `build`, in parallel with `provision-green`) checks `OCI_INSTANCE_OCID`'s `lifecycle-state` directly and fails fast with specific repointing instructions if it's not `RUNNING`, instead of letting the deploy proceed into a confusing `Preflight health-check policy` failure (`No VNICs found for this instance` / `Failed to resolve one or both VM private IPs`) 10+ minutes later. Added 2026-07-17 after `OCI_INSTANCE_OCID` silently drifted to a `TERMINATED` instance while production was being served by a different, unrecorded VM — see the gotcha note above for why a guard failure here doesn't always mean the variable is actually wrong; it can also mean a run in flight just correctly moved it forward.
+
+To fix a real failure here: find the live backend and its instance OCID, then repoint the variable.
+
+```bash
+# Step 1: find the live backend (weight=100, drain=false)
+oci lb backend list --load-balancer-id "$OCI_LB_OCID" --backend-set-name "$OCI_LB_LINKER_BACKEND"
+
+# Step 2: match its IP to an instance OCID
+oci compute instance list --compartment-id "$TF_COMPARTMENT_ID" --lifecycle-state RUNNING \
+  --query 'data[].{name:"display-name", id:id, created:"time-created"}' --output table
+# then confirm the match:
+oci compute instance list-vnics --instance-id <candidate> --query 'data[0]."private-ip"' --raw-output
+
+# Step 3: set it
+gh variable set OCI_INSTANCE_OCID --body "<the-real-ocid>"
+```
+
 ---
 
 ## Legacy — Single-VM Deployment (superseded)
