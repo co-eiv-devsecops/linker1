@@ -12,7 +12,7 @@ Issue #74 (bonus): reimplement Linker as a serverless function on AWS Lambda or 
 | --- | --- |
 | `linker.LinkService` | `linker.serverless.LinkLambdaHandler` — routes API Gateway proxy events to `LinkService`, replacing Javalin's `LinkRoutes` |
 | `linker.LinkRepository` | `linker.serverless.LambdaComposition` — composition root wiring a MySQL connection from Lambda environment variables, replacing `Main`'s SQLite wiring |
-| `linker.Link`, `linker.AliasConflictException` | `serverless/template.yaml` — AWS SAM IaC |
+| `linker.Link`, `linker.AliasConflictException` | `serverless/template.yaml` (production) + `serverless/template-demo.yaml` (restricted-account demo) — AWS SAM IaC |
 | The exact same fat jar (`target/linker1-1.0-jar-with-dependencies.jar`) `mvn package` already builds for the VM target | `.github/workflows/serverless-deploy.yml` — deploy pipeline |
 
 `LinkService`/`LinkRepository` have zero AWS/Lambda-specific code in them — `LinkLambdaHandler` is a thin adapter, the same shape as `LinkRoutes` is for Javalin. This is the literal meaning of "same artifact for all platforms": one `mvn package` run produces one jar; the VM target points `java -jar` at `Main`, the Lambda target points its `Handler:` config at `linker.serverless.LinkLambdaHandler::handleRequest` inside that same jar. There is no second build, no forked business logic.
@@ -79,6 +79,37 @@ This runs `.github/workflows/serverless-deploy.yml`:
 2. `sam build` + `sam deploy` against `serverless/template.yaml` — provisions the Lambda function, IAM execution role, and API Gateway REST API (`AWS::Serverless::Api`, implicit via the `Api` event source).
 3. Prints the deployed API Gateway invoke URL from the CloudFormation stack outputs.
 
+### Demo deployment in AWS Academy / Voclabs (what was actually used in July 2026)
+
+In Voclabs Learner Lab, the production template's assumptions can fail in practice:
+
+- Creating IAM roles is restricted (so `CAPABILITY_IAM` role creation from the stack is blocked).
+- Reaching the OCI-hosted MySQL from AWS Lambda is not available in this lab setup (cross-cloud private-network gap).
+
+For that environment, use `serverless/template-demo.yaml` instead. It keeps the same handler and the same jar artifact, but:
+
+- Uses a **pre-existing** execution role passed as `ExecutionRoleArn` (no new role creation).
+- Omits `VpcConfig` and `MYSQL_*` env vars so `LambdaComposition` uses SQLite at `/tmp/linker1.db` fallback (ephemeral/demo-only).
+- Deploys a clearly named demo function: `linker1-serverless-demo`.
+
+Final confirmation invoke against the clean demo function:
+
+```powershell
+aws lambda invoke `
+  --function-name linker1-serverless-demo `
+  --cli-binary-format raw-in-base64-out `
+  --payload file://<path-to-evt-create.json> `
+  <path-to-resp-final.json>
+```
+
+Observed result:
+
+```json
+{"statusCode":201,"headers":{"Location":"/132cfc61"},"body":"132cfc61"}
+```
+
+In this lab environment, API Gateway endpoint access can be blocked by account policy; direct Lambda invocation still proves the deployment is live and correctly handling requests.
+
 ### Local testing before a real deploy
 
 The AWS SAM CLI can invoke the packaged jar locally without deploying anything, using Docker to emulate the Lambda runtime:
@@ -122,6 +153,7 @@ curl -i "${API_URL}<the-id-from-above>"
 
 - [Deployment (VM / blue-green)](DEPLOYMENT.md) — the primary PROD target this is additive to.
 - [Health Check](HEALTHCHECK.md) — why MySQL was already wired up as a backing service before this bonus existed.
-- [`serverless/template.yaml`](../serverless/template.yaml) — the SAM IaC.
+- [`serverless/template.yaml`](../serverless/template.yaml) — production SAM IaC (MySQL + VPC).
+- [`serverless/template-demo.yaml`](../serverless/template-demo.yaml) — restricted-account demo SAM IaC (pre-existing role + SQLite `/tmp` fallback).
 - [`.github/workflows/serverless-deploy.yml`](../.github/workflows/serverless-deploy.yml) — the deploy pipeline.
 - [`src/linker/serverless/`](../src/linker/serverless/) — the handler, composition root, and coverage-exclusion marker.
