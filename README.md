@@ -1,6 +1,7 @@
-[![CI](https://github.com/co-eiv-devsecops/linker1/actions/workflows/ci.yml/badge.svg?branch=DEV)](https://github.com/co-eiv-devsecops/linker1/actions/workflows/ci.yml)
-[![Deployment Pipeline](https://github.com/co-eiv-devsecops/linker1/actions/workflows/pipeline.yml/badge.svg?branch=main)](https://github.com/co-eiv-devsecops/linker1/actions/workflows/pipeline.yml)
+[![CI](https://github.com/co-eiv-devsecops/linker1/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/co-eiv-devsecops/linker1/actions/workflows/ci.yml)
+[![Blue/Green Deployment](https://github.com/co-eiv-devsecops/linker1/actions/workflows/bluegreen.yml/badge.svg?branch=main)](https://github.com/co-eiv-devsecops/linker1/actions/workflows/bluegreen.yml)
 [![Release](https://github.com/co-eiv-devsecops/linker1/actions/workflows/release.yml/badge.svg)](https://github.com/co-eiv-devsecops/linker1/actions/workflows/release.yml)
+[![Production](https://img.shields.io/website?url=https%3A%2F%2F1.n-la-c.app%2Fhealthz&label=production)](https://1.n-la-c.app/)
 
 # Linker1
 
@@ -21,6 +22,26 @@ Linker1 is a web application that lets you:
 - `GET /{id}` — Redirects (`301`) to the URL associated with the short code or alias. Responds `404` if it doesn't exist.
 - `HEAD /{id}` — Resolves a short link. Responds `200` with the real URL in the response body if found (without redirecting), or `404` if not.
 - `DELETE /{id}` — Deletes a short link. Responds `204` on success, or `404` if the short code or alias doesn't exist.
+
+## Course Deliverables (final assignment)
+
+Status of every item from the final assignment ("La nube aplicación céntrica"), verified against actual code/CI/live infrastructure — not just issue-tracker status. Full detail and runbooks are linked per item; the [wiki](https://github.com/co-eiv-devsecops/linker1/wiki) covers the cloud operating model narrative and postmortems.
+
+| Deliverable | Status | Where |
+| --- | --- | --- |
+| **Redeploy: blue/green + ephemeral test environment** | ✅ Done | [`bluegreen.yml`](.github/workflows/bluegreen.yml) provisions a green VM, runs a k6 functional suite against it directly (24 checks: static assets, CRUD, alias, redirect, HEAD, DELETE) *before* it ever reaches the load balancer, then health-checks → A/B splits (90/10) → promotes → retires the old VM. A failing test or health check destroys the green VM without it ever taking production traffic. See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md#switchover-runbook-issue-72). |
+| **Grafana post-deploy monitoring** | ✅ Dashboard + docs done · ⚠️ Bonus automated check scaffolded, not live | Dashboard at [`docs/grafana/linker1-dashboard.json`](docs/grafana/linker1-dashboard.json), navigation/panel guide in [`docs/MONITORING.md`](docs/MONITORING.md). The post-deploy Grafana-query check (`scripts/check-grafana-metrics.sh`) is wired into the pipeline but degrades to a warning — the Grafana Cloud API key it needs requires org-admin on the shared course Grafana account, which nobody on the team has (confirmed, not assumed). |
+| **Feature launch via a separate pipeline** | ✅ Done | [`feature-launch.yml`](.github/workflows/feature-launch.yml) is a standalone `workflow_dispatch` workflow that toggles a LaunchDarkly flag via its REST API directly — no build or deploy job runs. Genuinely decoupled from `bluegreen.yml`/`pipeline.yml`. |
+| **New endpoints: `HEAD /{id}`, `DELETE /{id}`** | ✅ API done · ⚠️ No UI control for DELETE | Implemented in [`LinkRoutes.java`](src/linker/routes/LinkRoutes.java), fully unit- and k6-tested. The web UI doesn't expose a "delete this link" button — the assignment's metadata/delete requirement is satisfied at the API level (see [API](#api) above), not yet surfaced in `public/`. |
+| **Operations documentation** | ✅ Done | Wiki [Onboarding](https://github.com/co-eiv-devsecops/linker1/wiki/Onboarding) page covers first-day setup, scripts, and an audited "0 manual OCI console operations" table. Grafana navigation in [`docs/MONITORING.md`](docs/MONITORING.md). |
+| **12-factor audit + cloud operating model wiki** | ✅ Done | Wiki: [12-Factor App](https://github.com/co-eiv-devsecops/linker1/wiki/12%E2%80%90Factor-App), [Cloud Architecture](https://github.com/co-eiv-devsecops/linker1/wiki/Cloud-Architecture), [DevSecOps Practices](https://github.com/co-eiv-devsecops/linker1/wiki/DevSecOps-Practices). |
+| **Fictitious postmortems** | ✅ Done (5) | Wiki: [Postmortems](https://github.com/co-eiv-devsecops/linker1/wiki/Postmortems) — modeled on this repo's own real incidents (OTLP protocol mismatch, systemd `%`-escaping, empty-env-var startup crash, branch-protection misconfiguration, JDBC driver SPI collision). |
+| **All doc links routed through the linker1 shortener** | ✅ Done | Every external link in `docs/*.md` and the wiki resolves through `https://1.n-la-c.app/<alias>` — see [`scripts/shorten-doc-links.sh`](scripts/shorten-doc-links.sh) for the reproducible bulk-creation script. |
+| **Bonus: serverless reimplementation (AWS Lambda)** | ✅ Deployed and verified live | [`linker.serverless.LinkLambdaHandler`](src/linker/serverless/LinkLambdaHandler.java) reuses `LinkService`/`LinkRepository` unchanged, packaged in the *same* fat jar as the VM target. Deployed to a real AWS Lambda function and verified end to end (create, redirect, alias, HEAD, DELETE, 404 all confirmed against live infrastructure). See [`docs/SERVERLESS.md`](docs/SERVERLESS.md) for the full deployment record, including two distinct AWS Academy/Voclabs account restrictions discovered and worked around. |
+
+**Known, documented gaps** (not hidden): the Grafana post-deploy check and the k6-Cloud result-upload integration both need a credential that requires org-admin access on a shared course account nobody on the team has — both degrade gracefully (warn, don't fail the pipeline) rather than block deploys. See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) and [`docs/MONITORING.md`](docs/MONITORING.md) for the exact blocked API calls and what an org admin would need to do to unblock them.
+
+**On "homogeneous participation"**: not something verifiable from code or commit counts alone (a single well-scoped PR can represent more real contribution than many small commits, and this session's AI-assisted commits are attributed to one team member's account regardless of who directed the work) — the team should confirm this directly rather than infer it from `git shortlog`.
 
 ## Requirements
 
