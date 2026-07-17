@@ -186,26 +186,59 @@ jobs:
       contents: read
       # actions: write is required for GITHUB_TOKEN to update repository variables.
       actions: write
+    env:
+      # Captured at job start, BEFORE the variable is repointed at green below,
+      # so the terminate step can't accidentally target the new VM.
+      BLUE_OCID: ${{ vars.OCI_INSTANCE_OCID }}
+      GREEN_OCID: ${{ needs.provision-green.outputs.green-instance-id }}
     steps:
-      - name: Terminate blue VM
-        uses: oracle-actions/run-oci-cli-command@v1.3.2
-        with:
-          command: >-
-            compute instance terminate
-            --instance-id "${{ vars.OCI_INSTANCE_OCID }}"
-            --force
-            --wait-for-state TERMINATED
-            --max-wait-seconds 600
-
+      # Runs FIRST: the LB has already promoted green to 100%, so the next
+      # deploy must treat green as "current" regardless of whether the old
+      # blue VM terminates cleanly below.
       - name: Promote OCI_INSTANCE_OCID to green VM
-        # Makes the next blue/green deploy cycle use the newly-promoted VM as
-        # the "current" (blue) backend.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh variable set OCI_INSTANCE_OCID \
-            --body "${{ needs.provision-green.outputs.green-instance-id }}" \
-            --repo "${{ github.repository }}"
+          set -uo pipefail
+          if gh variable set OCI_INSTANCE_OCID --body "$GREEN_OCID" --repo "${{ github.repository }}"; then
+            echo "OCI_INSTANCE_OCID updated to green VM: $GREEN_OCID"
+          else
+            # The org disables workflow-token variable writes repo-wide
+            # ("Resource not accessible by integration" -- see
+            # docs/DEPLOYMENT.md). The deploy itself already succeeded, so
+            # surface the required manual step loudly instead of failing the
+            # whole job over bookkeeping.
+            echo "::warning::Could not update OCI_INSTANCE_OCID (org policy blocks GITHUB_TOKEN variable writes). Run manually: gh variable set OCI_INSTANCE_OCID --body \"$GREEN_OCID\""
+          fi
+
+      # Installs the OCI CLI so the bash step below can call `oci` directly.
+      - name: Prime OCI CLI
+        uses: oracle-actions/run-oci-cli-command@v1.3.2
+        with:
+          command: '--version'
+          silent: 'true'
+
+      # Plain bash instead of run-oci-cli-command: that action's silent mode
+      # swallows the CLI's stderr, which turned a previous failure here into
+      # an undebuggable bare "exit code 2". Termination is asynchronous on
+      # OCI's side, so fire the request and confirm the instance is on its
+      # way out instead of blocking up to 10 minutes for TERMINATED.
+      - name: Terminate blue VM
+        run: |
+          set -euo pipefail
+          state="$(oci compute instance get --instance-id "$BLUE_OCID" \
+            --query 'data."lifecycle-state"' --raw-output 2>/dev/null || echo "NOT_FOUND")"
+          echo "Blue VM $BLUE_OCID state: $state"
+          case "$state" in
+            TERMINATED|TERMINATING|NOT_FOUND)
+              echo "Blue VM already retired; nothing to do."
+              exit 0
+              ;;
+          esac
+          oci compute instance terminate --instance-id "$BLUE_OCID" --force
+          state="$(oci compute instance get --instance-id "$BLUE_OCID" \
+            --query 'data."lifecycle-state"' --raw-output 2>/dev/null || echo "GONE")"
+          echo "Blue VM state after terminate request: $state"
 
   # ── 4b. Tear down green VM on failure ─────────────────────────────────────
   # The reusable workflow already handled the LB side (rollback-to-current +
