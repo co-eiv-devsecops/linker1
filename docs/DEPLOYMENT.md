@@ -86,6 +86,8 @@ gh variable set K6_CLOUD_PROJECT_ID --body "<project id>"
 
 Without these, `functional-test-green` still runs and still gates the deploy correctly — it just runs `k6 run` locally on the GitHub runner instead of `k6 run --out cloud`, so results won't show up under Grafana's **Testing & synthetics** view. (Note: Grafana's separate **Agentic testing** feature under that same sidebar section is an interactive AI browser-test-authoring tool with no CI/API integration — it cannot be populated from this or any pipeline. **Performance testing**, which k6 Cloud results feed, is the sibling feature this job targets instead.)
 
+**Confirmed blocked by org policy on the shared course stack (2026-07-16)**: creating a k6 Cloud environment variable/token on `coralavocado2395` fails with `403 You do not have permission to perform this action` (`POST .../grafana-agentictesting-app/resources/k6/v3/organizations/.../envvars`) — same org-admin-only wall as `GRAFANA_CLOUD_API_KEY` (see [`MONITORING.md`](MONITORING.md#post-deploy-automated-check-bonus)). Neither is fixable from the team side; both need an org admin on the Grafana Cloud account to either grant Editor/Admin access or hand over a token directly. Until then, `functional-test-green` runs in its degraded (local-only, no cloud upload) mode by design — this is not a bug, just an unmet optional dependency.
+
 ### Required secrets and variables — Blue/Green
 
 The OCI CLI secrets (`OCI_CLI_USER`, `OCI_CLI_TENANCY`, `OCI_CLI_FINGERPRINT`, `OCI_CLI_KEY_CONTENT`, `OCI_CLI_REGION`) and application secrets (`LD_SDK_KEY`, `MYSQL_*`, `OTEL_*`, `DEPLOYMENT_PUBLIC_KEY`) are shared with the legacy pipeline and do not need to be re-added.
