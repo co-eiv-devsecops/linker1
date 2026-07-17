@@ -61,6 +61,49 @@ jobs:
       - name: Verify build compiles and packages
         run: mvn -B -ntp package -DskipTests
 
+  # ── 1b. Verify OCI_INSTANCE_OCID points at a real, running VM ─────────────
+  # Real incident (2026-07-17): OCI_INSTANCE_OCID silently drifted to a
+  # TERMINATED instance -- the workflow's own attempt to keep it in sync
+  # (teardown-blue-on-success, below) has been failing on a known, documented
+  # org policy (GITHUB_TOKEN can't write repo variables) since before this
+  # workflow existed, degrading to a `::warning::` instead of blocking, so
+  # nobody noticed until "Preflight health-check policy" started failing with
+  # a generic "No VNICs found" / "Failed to resolve one or both VM private
+  # IPs" error. That error looks identical whether the cause is a transient
+  # OCI propagation delay (which retrying fixes) or a permanently-terminated
+  # instance (which no amount of retrying ever fixes) -- this job tells the
+  # two apart immediately, before wasting a green VM + 12x5s of retries in
+  # the reusable workflow on a dead OCID.
+  verify-current-instance:
+    name: Verify OCI_INSTANCE_OCID is a running instance
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prime OCI CLI
+        uses: oracle-actions/run-oci-cli-command@v1.3.2
+        with:
+          command: '--version'
+          silent: 'true'
+
+      - name: Check lifecycle state
+        env:
+          CURRENT_OCID: ${{ vars.OCI_INSTANCE_OCID }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CURRENT_OCID" ]; then
+            echo "::error::OCI_INSTANCE_OCID is unset. Set it to the OCID of the VM currently serving production traffic: gh variable set OCI_INSTANCE_OCID --body \"ocid1.instance...\""
+            exit 1
+          fi
+
+          state="$(oci compute instance get --instance-id "$CURRENT_OCID" \
+            --query 'data."lifecycle-state"' --raw-output 2>/dev/null || echo "NOT_FOUND")"
+          echo "OCI_INSTANCE_OCID ($CURRENT_OCID) lifecycle-state: $state"
+
+          if [ "$state" != "RUNNING" ]; then
+            echo "::error::OCI_INSTANCE_OCID points at an instance in state '$state', not RUNNING -- this deploy would otherwise fail preflight with a confusing 'No VNICs found'/IP-resolution error. This usually means the variable drifted out of sync with what the load balancer is actually serving (see docs/DEPLOYMENT.md, 'variables: write is blocked by org policy'). Find the real live backend and repoint the variable. Step 1, find the live IP (weight=100, drain=false): oci lb backend list --load-balancer-id ${{ vars.OCI_LB_OCID }} --backend-set-name ${{ vars.OCI_LB_LINKER_BACKEND }}. Step 2, match it to an instance OCID: oci compute instance list-vnics --instance-id CANDIDATE. Step 3: gh variable set OCI_INSTANCE_OCID --body REAL_OCID"
+            exit 1
+          fi
+
   # ── 2. Provision green VM ─────────────────────────────────────────────────
   # Creates a brand-new OCI VM (green) using the existing infra/main.tf.
   # The blue VM is not touched.  cloud-init clones the repo and starts the
@@ -322,7 +365,7 @@ jobs:
   # surfacing a failed result here.
   blue-green-lb-deploy:
     name: Blue/green LB deploy
-    needs: [provision-green, functional-test-green]
+    needs: [provision-green, functional-test-green, verify-current-instance]
     # Vendored locally (.github/workflows/oci-lb-bluegreen-ab.yml) instead of
     # `uses: co-eiv-devsecops/material-curso/...@main` -- the org restricted
     # cross-repo Actions access to material-curso sometime after 2026-07-11,
@@ -425,20 +468,22 @@ jobs:
           echo "Blue VM state after terminate request: $state"
 
   # ── 4b. Tear down green VM on failure ─────────────────────────────────────
-  # Covers two failure paths:
-  #   1. functional-test-green fails -> blue-green-lb-deploy is skipped
-  #      entirely (its `needs` never runs) -- the green VM never reaches the
-  #      LB and needs cleanup here directly.
+  # Covers three failure paths:
+  #   1. functional-test-green fails, or verify-current-instance fails ->
+  #      blue-green-lb-deploy is skipped entirely (its `needs` never runs) --
+  #      the green VM never reaches the LB and needs cleanup here directly.
   #   2. blue-green-lb-deploy itself fails -- it already handled the LB side
   #      (rollback-to-current + remove-new-backend); this job just destroys
   #      the OCI compute instance so it doesn't keep accruing cost.
   # Either way the blue VM is untouched and continues serving 100% traffic.
   teardown-green-on-failure:
     name: Destroy green VM after failed deploy
-    needs: [provision-green, functional-test-green, blue-green-lb-deploy]
+    needs: [provision-green, functional-test-green, verify-current-instance, blue-green-lb-deploy]
     if: >-
       ${{ always() && needs.provision-green.result == 'success' &&
-          (needs.functional-test-green.result == 'failure' || needs.blue-green-lb-deploy.result == 'failure') }}
+          (needs.functional-test-green.result == 'failure' ||
+           needs.verify-current-instance.result == 'failure' ||
+           needs.blue-green-lb-deploy.result == 'failure') }}
     runs-on: ubuntu-latest
     env:
       TF_VAR_region:                       ${{ vars.OCI_CLI_REGION || 'sa-bogota-1' }}
