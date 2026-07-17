@@ -141,6 +141,15 @@ jobs:
     name: Functional tests on green VM
     needs: provision-green
     runs-on: ubuntu-latest
+    # Required for OCI_BASTION_OCID (an organization-level variable) to
+    # actually resolve. Confirmed by a real failed run (2026-07-17): without
+    # this, `vars.OCI_BASTION_OCID` came through as an empty string here even
+    # though the identical `${{ vars.OCI_BASTION_OCID }}` reference works in
+    # pipeline.yml's `deploy-prod` job -- the one difference being that job's
+    # `environment: prod` scoping. Org policy evidently restricts which
+    # environments organization variables are shared with.
+    environment:
+      name: prod
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
