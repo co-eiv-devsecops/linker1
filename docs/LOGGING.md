@@ -2,7 +2,7 @@
 
 ## Framework
 
-Linker1 logs through [SLF4J](https://www.slf4j.org/) with [Logback](https://logback.qos.ch/) as the binding, configured in [`resources/logback.xml`](../resources/logback.xml) (packaged at the root of the jar's classpath, so it applies regardless of how the jar is launched).
+Linker1 logs through [SLF4J](https://1.n-la-c.app/doc-slf4j) with [Logback](https://1.n-la-c.app/doc-logback) as the binding, configured in [`resources/logback.xml`](../resources/logback.xml) (packaged at the root of the jar's classpath, so it applies regardless of how the jar is launched).
 
 Every log call in application code goes through a class-scoped SLF4J `Logger`:
 
@@ -58,7 +58,7 @@ To change verbosity on the live instance without a redeploy: edit that line (or 
 
 ## Log export via OpenTelemetry
 
-Every log line is also delivered to the OpenTelemetry Logs pipeline via [`opentelemetry-logback-appender-1.0`](https://github.com/open-telemetry/opentelemetry-java-instrumentation/tree/main/instrumentation/logback/logback-appender-1.0), configured as a second appender alongside the console:
+Every log line is also delivered to the OpenTelemetry Logs pipeline via [`opentelemetry-logback-appender-1.0`](https://1.n-la-c.app/doc-otel-logback-appender), configured as a second appender alongside the console:
 
 ```xml
 <appender name="OTEL" class="io.opentelemetry.instrumentation.logback.appender.v1_0.OpenTelemetryAppender">
