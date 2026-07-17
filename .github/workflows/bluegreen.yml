@@ -145,20 +145,26 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # `environment: prod` was tried here first and made no difference --
-      # OCI_BASTION_OCID is an organization-level variable and pipeline.yml's
-      # own deploy-prod job (which HAS environment: prod) has also been
-      # getting it empty on every run since before this job existed. This
-      # step exists purely to confirm that fact from inside this workflow's
-      # own context (length only, never the value) before spending another
-      # OCI API call finding out the hard way.
+      # The org-level OCI_BASTION_OCID variable (used by pipeline.yml) turned
+      # up empty in this job with no fix available on the workflow-YAML side
+      # -- neither repo-level Settings > Variables nor the org-level page
+      # (github.com/organizations/co-eiv-devsecops/settings/variables/actions)
+      # were reachable/editable by anyone on the team. Root cause found by
+      # searching every compartment in the tenancy for the actual Bastion
+      # (`bastion bastion list --compartment-id <cmp>` in a loop over
+      # `iam compartment list --compartment-id-in-subtree true --all`):
+      # ocid1.bastion.oc1.sa-bogota-1...zu3q, named "bstlinkerprojects", living
+      # in a compartment separate from TF_COMPARTMENT_ID. That OCID is now set
+      # as a REPO-level OCI_BASTION_OCID variable, which takes priority over
+      # the (apparently inaccessible) org-level one of the same name. This
+      # step is kept as a permanent fast-fail guard in case that ever regresses.
       - name: Diagnose OCI_BASTION_OCID visibility
         env:
           OCI_BASTION_OCID: ${{ vars.OCI_BASTION_OCID }}
         run: |
           echo "OCI_BASTION_OCID length: ${#OCI_BASTION_OCID}"
           if [ -z "$OCI_BASTION_OCID" ]; then
-            echo "::error::OCI_BASTION_OCID resolved empty in this job's context. This is an organization-level variable (not set at repo level -- confirmed absent from Settings > Secrets and variables > Actions > Variables on this repo). It must be created/shared at https://github.com/organizations/co-eiv-devsecops/settings/variables/actions with this repository included in its access list. This is not fixable from workflow YAML."
+            echo "::error::OCI_BASTION_OCID resolved empty. A repo-level OCI_BASTION_OCID variable should be set (see docs/DEPLOYMENT.md) -- if this fires, that variable was removed or renamed. Run: gh variable set OCI_BASTION_OCID --body \"ocid1.bastion.oc1.sa-bogota-1...\" (find the value with 'oci bastion bastion list --compartment-id <cmp>' across compartments -- see docs/DEPLOYMENT.md for the full search loop)."
             exit 1
           fi
 
@@ -201,18 +207,44 @@ jobs:
           printf '%s\n' "$DEPLOYMENT_PRIVATE_KEY" > "$priv_key"
           chmod 600 "$priv_key"
 
-          session_id="$(oci bastion session create-managed-ssh \
-            --bastion-id "$OCI_BASTION_OCID" \
-            --ssh-public-key-file "$pub_key" \
-            --target-resource-id "$TARGET_INSTANCE_ID" \
-            --target-os-username ubuntu \
-            --target-port 22 \
-            --key-type PUB \
-            --session-ttl 1800 \
-            --wait-for-state SUCCEEDED \
-            --wait-interval-seconds 10 \
-            --query 'data.resources[?"entity-type"==`SessionResource` && "action-type"==`CREATED`].identifier | [0]' \
-            --raw-output)"
+          # The Bastion plugin is set to ENABLED at instance launch
+          # (infra/main.tf's agent_config block), but "enabled" and actually
+          # "RUNNING" on the Oracle Cloud Agent are different states -- a
+          # freshly-booted green VM needs a short window after boot before
+          # the plugin reports RUNNING. create-managed-ssh fails with
+          # InvalidParameter ("the Bastion plugin must be in the RUNNING
+          # state") if called too early. Retry on that specific message
+          # instead of a fixed sleep, since boot time varies.
+          session_id=""
+          for attempt in $(seq 1 10); do
+            if session_id="$(oci bastion session create-managed-ssh \
+              --bastion-id "$OCI_BASTION_OCID" \
+              --ssh-public-key-file "$pub_key" \
+              --target-resource-id "$TARGET_INSTANCE_ID" \
+              --target-os-username ubuntu \
+              --target-port 22 \
+              --key-type PUB \
+              --session-ttl 1800 \
+              --wait-for-state SUCCEEDED \
+              --wait-interval-seconds 10 \
+              --query 'data.resources[?"entity-type"==`SessionResource` && "action-type"==`CREATED`].identifier | [0]' \
+              --raw-output 2>"$work_dir/bastion-create-err")"; then
+              break
+            fi
+            if grep -q "Bastion plugin must be in the RUNNING state" "$work_dir/bastion-create-err"; then
+              echo "Attempt $attempt/10: Bastion plugin not RUNNING yet on the green VM, retrying in 15s..."
+              sleep 15
+              session_id=""
+              continue
+            fi
+            echo "::error::create-managed-ssh failed for a reason other than the plugin not being ready yet:"
+            cat "$work_dir/bastion-create-err" >&2
+            exit 1
+          done
+          if [ -z "$session_id" ]; then
+            echo "::error::Bastion plugin never reached RUNNING state on the green VM after 10 attempts (~2.5 min)."
+            exit 1
+          fi
           echo "Bastion session: $session_id"
           trap 'oci bastion session delete --session-id "$session_id" --force || true' EXIT
 
@@ -225,16 +257,53 @@ jobs:
             --query 'data."ssh-metadata".command' --raw-output)"
           ssh_command="${ssh_command//<privateKey>/$priv_key}"
 
+          # StrictHostKeyChecking/UserKnownHostsFile appended below only apply
+          # to the OUTER ssh process -- the ProxyCommand embedded in OCI's own
+          # command string runs a SECOND, nested ssh (to the Bastion host
+          # itself) that inherits none of those flags and fails host-key
+          # verification on a first connection, silently killing the tunnel
+          # in the background with no error surfaced until the curl/k6 steps
+          # below time out. Inject the same two options right after the
+          # inner "ssh " token in ProxyCommand="ssh ...", via plain bash
+          # string replacement (not sed) so there's no quoting/escaping to
+          # get wrong across shells.
+          inner_opts="-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$work_dir/known_hosts "
+          ssh_command="${ssh_command/ProxyCommand=\"ssh /ProxyCommand=\"ssh $inner_opts}"
+
           # Turn the interactive command into a backgrounded local tunnel:
           # -N (no remote command) + -L (forward 18080 -> green VM's 8080).
           eval "$ssh_command -N -L 18080:localhost:8080 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$work_dir/known_hosts &"
           tunnel_pid=$!
           trap 'kill "$tunnel_pid" 2>/dev/null || true; oci bastion session delete --session-id "$session_id" --force || true' EXIT
 
-          for i in $(seq 1 20); do
-            curl -sf http://localhost:18080/ > /dev/null 2>&1 && break
-            sleep 3
+          # Give ssh a moment to either establish or fail outright (e.g. a
+          # second host-key issue) before polling with curl -- catches a dead
+          # tunnel immediately instead of burning the full 20-attempt/60s
+          # curl loop only to report a generic "connection refused" with no
+          # context on why the tunnel itself never came up.
+          sleep 2
+          if ! kill -0 "$tunnel_pid" 2>/dev/null; then
+            echo "::error::SSH tunnel process exited immediately -- it never reached the point of listening on 18080. This is usually a host-key verification failure on the ProxyCommand's inner hop; re-run with 'ssh -v' substituted in for full diagnostics if this recurs."
+            exit 1
+          fi
+
+          # cloud-init on a fresh green VM runs git clone + mvn clean package
+          # + systemd start before anything answers on 8080 -- the reusable
+          # blue/green workflow's own LB health-check budget is 40 attempts x
+          # 30s (20 min) for exactly this reason. 60s here was far too short;
+          # match a similarly generous budget rather than a guessed short one.
+          app_up=false
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:18080/ > /dev/null 2>&1; then
+              app_up=true
+              break
+            fi
+            sleep 10
           done
+          if [ "$app_up" != "true" ]; then
+            echo "::error::App on green VM never answered on port 8080 after 10 min through the Bastion tunnel -- cloud-init (git clone + mvn build + systemd start) may still be running, or may have failed. SSH in via 'oci bastion session create-managed-ssh' and check 'cloud-init status' / 'systemctl status linker1' / 'journalctl -u linker1' for the real cause before assuming this is a tunnel problem."
+            exit 1
+          fi
 
           if [ -n "${K6_CLOUD_TOKEN:-}" ] && [ -n "${K6_CLOUD_PROJECT_ID:-}" ]; then
             TARGET_URL=http://localhost:18080 k6 run --out cloud tests/k6/switchover-checks.js
