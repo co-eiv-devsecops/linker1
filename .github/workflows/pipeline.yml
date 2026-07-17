@@ -1,9 +1,13 @@
 name: Deployment Pipeline
 
+# Manual-only since blue/green (bluegreen.yml) became the deploy path for
+# pushes to main. Running both on every push made them race: this pipeline
+# deploys over the OCI Bastion straight onto the "current" VM (restarting the
+# service mid-A/B-window) while bluegreen.yml is simultaneously provisioning
+# and promoting a green VM against the same load balancer backend set. Kept
+# as workflow_dispatch for emergency single-VM redeploys; see
+# docs/DEPLOYMENT.md ("Legacy" section).
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 jobs:

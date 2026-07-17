@@ -151,8 +151,16 @@ jobs:
       backend-set-name:    ${{ vars.OCI_LB_LINKER_BACKEND }}
       new-instance-id:     ${{ needs.provision-green.outputs.green-instance-id }}
       current-instance-id: ${{ vars.OCI_INSTANCE_OCID }}
-      # /healthz runs SELECT 1 against MySQL; it is the real health endpoint.
-      health-check-path:   /healthz
+      # The shared LB's linker-1 backend set is configured with health-checker
+      # port 8080 and url-path "/" (verified via `oci lb backend-set get`).
+      # Backends must be registered on 8080 to match -- the reusable workflow's
+      # default backend-port is '80', which puts traffic on a different port
+      # than the health checker probes. The preflight job validates that
+      # health-check-path matches the LB's actual configured path, so this must
+      # be "/" (the app's own /healthz stays as the Grafana synthetic check;
+      # keeping the LB check on "/" also avoids coupling LB health to MySQL).
+      backend-port:        '8080'
+      health-check-path:   /
       # cloud-init clones the repo and runs mvn clean package before the service
       # starts.  Allow up to 20 min (40 × 30 s) for the OCI LB to report OK.
       health-wait-attempts: '40'

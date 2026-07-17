@@ -9,6 +9,15 @@ packages:
   - nginx
 
 runcmd:
+  # OCI Ubuntu images ship an iptables INPUT chain that REJECTs all inbound
+  # traffic except SSH. Without opening the app/nginx ports here, the OCI Load
+  # Balancer health check gets "Connection failed" even though the app is up
+  # (curl from the VM itself works because loopback is accepted; SSH works
+  # because 22 is allowed -- which is exactly what made this so hard to spot).
+  - iptables -I INPUT -p tcp -m tcp --dport 8080 -m state --state NEW -j ACCEPT
+  - iptables -I INPUT -p tcp -m tcp --dport 80 -m state --state NEW -j ACCEPT
+  - bash -c 'netfilter-persistent save || iptables-save > /etc/iptables/rules.v4 || true'
+
   # 2 GB swap so Maven doesn't OOM on small (1 GB RAM) Always-Free shapes.
   - fallocate -l 2G /swapfile
   - chmod 600 /swapfile
