@@ -141,18 +141,26 @@ jobs:
     name: Functional tests on green VM
     needs: provision-green
     runs-on: ubuntu-latest
-    # Required for OCI_BASTION_OCID (an organization-level variable) to
-    # actually resolve. Confirmed by a real failed run (2026-07-17): without
-    # this, `vars.OCI_BASTION_OCID` came through as an empty string here even
-    # though the identical `${{ vars.OCI_BASTION_OCID }}` reference works in
-    # pipeline.yml's `deploy-prod` job -- the one difference being that job's
-    # `environment: prod` scoping. Org policy evidently restricts which
-    # environments organization variables are shared with.
-    environment:
-      name: prod
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      # `environment: prod` was tried here first and made no difference --
+      # OCI_BASTION_OCID is an organization-level variable and pipeline.yml's
+      # own deploy-prod job (which HAS environment: prod) has also been
+      # getting it empty on every run since before this job existed. This
+      # step exists purely to confirm that fact from inside this workflow's
+      # own context (length only, never the value) before spending another
+      # OCI API call finding out the hard way.
+      - name: Diagnose OCI_BASTION_OCID visibility
+        env:
+          OCI_BASTION_OCID: ${{ vars.OCI_BASTION_OCID }}
+        run: |
+          echo "OCI_BASTION_OCID length: ${#OCI_BASTION_OCID}"
+          if [ -z "$OCI_BASTION_OCID" ]; then
+            echo "::error::OCI_BASTION_OCID resolved empty in this job's context. This is an organization-level variable (not set at repo level -- confirmed absent from Settings > Secrets and variables > Actions > Variables on this repo). It must be created/shared at https://github.com/organizations/co-eiv-devsecops/settings/variables/actions with this repository included in its access list. This is not fixable from workflow YAML."
+            exit 1
+          fi
 
       - name: Install k6
         run: |
