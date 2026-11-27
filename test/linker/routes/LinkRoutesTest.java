@@ -11,6 +11,7 @@ import linker.telemetry.RequestMetrics;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.net.URI;
@@ -43,6 +44,7 @@ class LinkRoutesTest {
         }
 
         var repo = new LinkRepository(conn);
+        repo.ensureClicksColumn();
         var service = new LinkService(repo);
         var testOtel = OpenTelemetrySdk.builder()
                 .setTracerProvider(SdkTracerProvider.builder().build())
@@ -66,8 +68,9 @@ class LinkRoutesTest {
         var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/existing")).GET().build();
         var response = client.send(request, HttpResponse.BodyHandlers.ofString());
 
-        assertEquals(301, response.statusCode());
+        assertEquals(302, response.statusCode());
         assertEquals("https://example.com", response.headers().firstValue("Location").orElse(null));
+        assertEquals("no-store", response.headers().firstValue("Cache-Control").orElse(null));
     }
 
     @Test
@@ -191,6 +194,75 @@ class LinkRoutesTest {
         var response = client.send(request, HttpResponse.BodyHandlers.ofString());
 
         assertEquals(400, response.statusCode());
+        assertTrue(response.body().contains("http://") && response.body().contains("https://"));
+        assertFalse(response.body().contains("not a url"));
+    }
+
+    @Test
+    void postLinkWithDangerousSchemeReturns400WithoutStoringUrl() throws Exception {
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/link"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString("{\"url\":\"javascript:alert(1)\"}"))
+                .build();
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(400, response.statusCode());
+        assertFalse(response.body().contains("javascript"));
+        assertTrue(response.body().contains("La URL no es válida"));
+        try (var ps = conn.prepareStatement("SELECT COUNT(*) AS total FROM shorturl WHERE url = ?")) {
+            ps.setString(1, "javascript:alert(1)");
+            try (var rs = ps.executeQuery()) {
+                assertTrue(rs.next());
+                assertEquals(0, rs.getInt("total"));
+            }
+        }
+    }
+
+    @Test
+    void postLinkWithReservedHealthAliasReturnsHelpful400AndDoesNotPersist() throws Exception {
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/link"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString("{\"url\":\"https://health.example.com\",\"alias\":\"healthz\"}"))
+                .build();
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(400, response.statusCode());
+        assertTrue(response.body().contains("reservado"));
+        try (var ps = conn.prepareStatement("SELECT url FROM shorturl WHERE id = 'healthz'");
+             var rs = ps.executeQuery()) {
+            assertFalse(rs.next());
+        }
+    }
+
+    @Test
+    void postAliasedLinkWithInvalidUrlReturnsUrlValidationMessage() throws Exception {
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/link"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString("{\"url\":\"javascript:alert(1)\",\"alias\":\"safe-name\"}"))
+                .build();
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(400, response.statusCode());
+        assertTrue(response.body().startsWith("La URL no es válida"));
+        assertFalse(response.body().contains("javascript"));
+    }
+
+    @Test
+    void postLinkWithOccupiedAliasReturnsSpanishConflictWithoutEchoingAlias() throws Exception {
+        var first = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/link"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString("{\"url\":\"https://one.example.com\",\"alias\":\"no-disponible\"}"))
+                .build();
+        client.send(first, HttpResponse.BodyHandlers.ofString());
+        var second = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/link"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString("{\"url\":\"https://two.example.com\",\"alias\":\"no-disponible\"}"))
+                .build();
+        var response = client.send(second, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(409, response.statusCode());
+        assertTrue(response.body().contains("El alias no está disponible"));
+        assertFalse(response.body().contains("no-disponible"));
     }
 
     @Test
@@ -213,7 +285,7 @@ class LinkRoutesTest {
         var response = client.send(request, HttpResponse.BodyHandlers.ofString());
 
         assertEquals(400, response.statusCode());
-        assertEquals("Invalid JSON", response.body());
+        assertEquals("El cuerpo de la solicitud no contiene un JSON válido.", response.body());
     }
 
     @Test
@@ -272,7 +344,7 @@ class LinkRoutesTest {
         var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/redirect-alias")).GET().build();
         var response = client.send(request, HttpResponse.BodyHandlers.ofString());
 
-        assertEquals(301, response.statusCode());
+        assertEquals(302, response.statusCode());
         assertEquals("https://redirect-check.example.com", response.headers().firstValue("Location").orElse(null));
     }
 
@@ -286,5 +358,72 @@ class LinkRoutesTest {
 
         assertEquals(201, response.statusCode());
         assertTrue(response.headers().firstValue("Location").isPresent());
+    }
+
+    private static void createAlias(String alias, String url) throws Exception {
+        var req = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/link"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(
+                        "{\"url\":\"" + url + "\",\"alias\":\"" + alias + "\"}"))
+                .build();
+        assertEquals(201, client.send(req, HttpResponse.BodyHandlers.ofString()).statusCode());
+    }
+
+    private static HttpResponse<String> stats(String id) throws Exception {
+        var req = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/link/" + id + "/stats")).GET().build();
+        return client.send(req, HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static long clicksOf(String id) throws Exception {
+        return new ObjectMapper().readTree(stats(id).body()).get("clicks").asLong();
+    }
+
+    private static void get(String id) throws Exception {
+        client.send(HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/" + id)).GET().build(),
+                HttpResponse.BodyHandlers.discarding());
+    }
+
+    @Test
+    void newLinkStartsWithZeroClicks() throws Exception {
+        createAlias("stats-zero", "https://zero.example.com");
+        assertEquals(0L, clicksOf("stats-zero"));
+    }
+
+    @Test
+    void eachGetAddsOneClick() throws Exception {
+        createAlias("stats-two", "https://two.example.com");
+        get("stats-two");
+        get("stats-two");
+        assertEquals(2L, clicksOf("stats-two"));
+    }
+
+    @Test
+    void headAndStatsDoNotAddClicks() throws Exception {
+        createAlias("stats-head", "https://head.example.com");
+        client.send(HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/stats-head"))
+                .method("HEAD", HttpRequest.BodyPublishers.noBody()).build(), HttpResponse.BodyHandlers.ofString());
+        stats("stats-head");
+        assertEquals(0L, clicksOf("stats-head"));
+    }
+
+    @Test
+    void statsReturns200WithIdAndClicksJson() throws Exception {
+        createAlias("stats-json", "https://json.example.com");
+        var response = stats("stats-json");
+        assertEquals(200, response.statusCode());
+        var json = new ObjectMapper().readTree(response.body());
+        assertEquals("stats-json", json.get("id").asText());
+        assertEquals(0, json.get("clicks").asInt());
+    }
+
+    @Test
+    void statsForUnknownIdReturns404() throws Exception {
+        assertEquals(404, stats("no-such-link").statusCode());
+    }
+
+    @Test
+    void getUnknownIdDoesNotCreateOrCountAnything() throws Exception {
+        get("ghost-link");
+        assertEquals(404, stats("ghost-link").statusCode());
     }
 }

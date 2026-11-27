@@ -1,0 +1,49 @@
+#cloud-config
+# Placeholders (__X__) are filled in by scripts/aws/bluegreen.sh.
+package_update: true
+
+packages:
+  - git
+  - maven
+  - openjdk-21-jdk
+
+runcmd:
+  # 2 GB swap so Maven does not run out of memory on small instances.
+  - fallocate -l 2G /swapfile
+  - chmod 600 /swapfile
+  - mkswap /swapfile
+  - swapon /swapfile
+  - bash -c 'echo "/swapfile none swap sw 0 0" >> /etc/fstab'
+
+  - mkdir -p /opt/linker1 /var/lib/linker1
+  - git clone __REPO_URL__ /home/ubuntu/linker1
+  - git -C /home/ubuntu/linker1 checkout __REPO_REF__
+  - cd /home/ubuntu/linker1 && mvn -q clean package -DskipTests
+  - >
+    JAR_FILE=$(find /home/ubuntu/linker1/target -name '*-jar-with-dependencies.jar' | head -n 1) &&
+    cp "$JAR_FILE" /opt/linker1/linker1.jar
+  - chown -R ubuntu:ubuntu /opt/linker1 /var/lib/linker1
+  - |
+    cat > /etc/systemd/system/linker1.service << 'INNEREOF'
+    [Unit]
+    Description=Linker1 URL Shortener
+    After=network.target
+
+    [Service]
+    Type=simple
+    WorkingDirectory=/opt/linker1
+    ExecStart=/usr/bin/java -jar /opt/linker1/linker1.jar
+    Restart=always
+    RestartSec=5
+    User=ubuntu
+    Environment="LINKER_PORT=8080"
+    Environment="LINKER_DB_PATH=/var/lib/linker1/linker1.db"
+    Environment="LOG_LEVEL=INFO"
+    __OPTIONAL_ENV__
+
+    [Install]
+    WantedBy=multi-user.target
+    INNEREOF
+  - systemctl daemon-reload
+  - systemctl enable linker1.service
+  - systemctl restart linker1.service

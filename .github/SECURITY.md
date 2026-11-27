@@ -11,7 +11,7 @@ opening a public issue:
 
 - Open a [private security advisory](https://github.com/co-eiv-devsecops/linker1/security/advisories/new)
   on this repository, or
-- Email anderssondavidsanchez@gmail.com
+- Email anderson.fgn13@gmail.com
 
 Please include steps to reproduce and the potential impact. We'll acknowledge
 reports within a few days.

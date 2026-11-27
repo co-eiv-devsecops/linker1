@@ -141,6 +141,13 @@ class LinkLambdaHandlerTest {
     }
 
     @Test
+    void getPathWithoutLeadingSlashFallsBackToPathParsing() {
+        handler.handleRequest(request("POST", "/link", "{\"url\":\"https://path-no-slash.example.com\",\"alias\":\"path-no-slash\"}"), null);
+        var resp = handler.handleRequest(request("GET", "path-no-slash", null), null);
+        assertEquals(301, resp.getStatusCode());
+    }
+
+    @Test
     void getRootPathReturns404NotFound() {
         var resp = handler.handleRequest(request("GET", "/", null), null);
         assertEquals(404, resp.getStatusCode());

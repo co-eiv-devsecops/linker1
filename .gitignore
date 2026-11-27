@@ -5,6 +5,7 @@ target/
 *.log
 *.metals
 /.vscode/
+/words/
 
 infra/terraform.tfvars
 infra/.terraform/
@@ -12,3 +13,5 @@ infra/*.tfstate
 infra/*.tfstate.backup
 infra/*.env
 infra/linker.env
+
+.idea/*

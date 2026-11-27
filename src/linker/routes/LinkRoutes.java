@@ -25,6 +25,31 @@ public final class LinkRoutes {
     }
 
     public void register(Javalin app) {
+        app.get("/link/{id}/stats", ctx -> {
+            log.trace("Received GET request on path={}", ctx.path());
+            var id = ctx.pathParam("id");
+            long start = System.currentTimeMillis();
+
+            Long clicks;
+            try {
+                clicks = service.getClicks(id);
+            } catch (Exception e) {
+                log.error("Failed to read stats for link id={}", id, e);
+                ctx.status(500).result("Internal error");
+                requestMetrics.recordRequest("/link/{id}/stats", 500, System.currentTimeMillis() - start);
+                return;
+            }
+
+            if (clicks == null) {
+                ctx.status(404).result("Not found");
+                requestMetrics.recordRequest("/link/{id}/stats", 404, System.currentTimeMillis() - start);
+                return;
+            }
+
+            ctx.json(Map.of("id", id, "clicks", clicks));
+            requestMetrics.recordRequest("/link/{id}/stats", 200, System.currentTimeMillis() - start);
+        });
+
         app.get("/{id}", ctx -> {
             log.trace("Received GET request on path={}", ctx.path());
             var id = ctx.pathParam("id");
@@ -33,7 +58,7 @@ public final class LinkRoutes {
 
             String url;
             try {
-                url = linkSpans.traceResolve(id, () -> service.get(id));
+                url = linkSpans.traceResolve(id, () -> service.open(id));
             } catch (Exception e) {
                 log.error("Failed to resolve link id={}", id, e);
                 ctx.status(500).result("Internal error");
@@ -42,9 +67,11 @@ public final class LinkRoutes {
             }
 
             if (url != null) {
-                log.info("Resolved link id={} to url={}", id, url);
-                ctx.redirect(url, HttpStatus.MOVED_PERMANENTLY);
-                requestMetrics.recordRequest("/{id}", 301, System.currentTimeMillis() - start);
+                // Destinations can contain private query parameters; do not put them in logs.
+                log.info("Resolved link id={}", id);
+                ctx.header("Cache-Control", "no-store");
+                ctx.redirect(url, HttpStatus.FOUND);
+                requestMetrics.recordRequest("/{id}", 302, System.currentTimeMillis() - start);
             } else {
                 log.warn("Link id={} not found", id);
                 ctx.status(404).result("Not found");
@@ -69,7 +96,8 @@ public final class LinkRoutes {
             }
 
             if (url != null) {
-                log.info("Resolved link id={} for HEAD to url={}", id, url);
+                // HEAD still returns the destination by API contract, but avoid duplicating it in logs.
+                log.info("Resolved link id={} for HEAD", id);
                 ctx.status(200).result(url);
                 requestMetrics.recordRequest("/{id}", 200, System.currentTimeMillis() - start);
             } else {
@@ -118,32 +146,32 @@ public final class LinkRoutes {
                     alias = (String) body.get("alias");
                 } catch (Exception e) {
                     log.warn("Invalid JSON body on POST /link", e);
-                    ctx.status(400).result("Invalid JSON");
+                    ctx.status(400).result("El cuerpo de la solicitud no contiene un JSON válido.");
                     requestMetrics.recordRequest("/link", 400, System.currentTimeMillis() - start);
                     return;
                 }
             }
 
-            log.debug("Creating link url={} alias={}", url, alias);
+            log.debug("Creating link (aliasProvided={})", alias != null);
             final var finalUrl = url;
             final var finalAlias = alias;
 
             if (alias != null) {
                 try {
-                    var link = linkSpans.traceCreate(url, () -> service.create(finalUrl, finalAlias));
-                    log.info("Created aliased link id={} url={}", link.id(), url);
+                    var link = linkSpans.traceCreate(() -> service.create(finalUrl, finalAlias));
+                    log.info("Created aliased link id={}", link.id());
                     ctx.status(HttpStatus.CREATED).header("Location", "/" + link.id()).result(link.id());
                     requestMetrics.recordRequest("/link", 201, System.currentTimeMillis() - start);
                 } catch (AliasConflictException e) {
-                    log.warn("Alias conflict for alias={}", alias);
-                    ctx.status(409).result(e.getMessage());
+                    log.warn("Alias conflict during link creation");
+                    ctx.status(409).result("El alias no está disponible. Elige otro.");
                     requestMetrics.recordRequest("/link", 409, System.currentTimeMillis() - start);
                 } catch (IllegalArgumentException e) {
-                    log.warn("Invalid request creating aliased link: {}", e.getMessage());
-                    ctx.status(400).result(e.getMessage());
+                    log.warn("Rejected invalid aliased link request");
+                    ctx.status(400).result(invalidCreationMessage(finalUrl));
                     requestMetrics.recordRequest("/link", 400, System.currentTimeMillis() - start);
                 } catch (Exception e) {
-                    log.error("Failed to create aliased link url={} alias={}", url, alias, e);
+                    log.error("Failed to create aliased link", e);
                     ctx.status(500).result("Internal error");
                     requestMetrics.recordRequest("/link", 500, System.currentTimeMillis() - start);
                 }
@@ -151,20 +179,27 @@ public final class LinkRoutes {
             }
 
             try {
-                var result = linkSpans.traceCreate(url, () -> service.createResult(finalUrl));
+                var result = linkSpans.traceCreate(() -> service.createResult(finalUrl));
                 var status = result.created() ? HttpStatus.CREATED : HttpStatus.OK;
-                log.info("Created link id={} url={} (new={})", result.link().id(), url, result.created());
+                log.info("Created link id={} (new={})", result.link().id(), result.created());
                 ctx.status(status).header("Location", "/" + result.link().id()).result(result.link().id());
                 requestMetrics.recordRequest("/link", status.getCode(), System.currentTimeMillis() - start);
             } catch (IllegalArgumentException e) {
-                log.warn("Invalid URL on POST /link: {}", url);
-                ctx.status(400).result("Invalid URL");
+                log.warn("Rejected invalid destination URL on POST /link");
+                ctx.status(400).result("La URL no es válida. Ingresa una dirección absoluta que comience con http:// o https:// y tenga un host.");
                 requestMetrics.recordRequest("/link", 400, System.currentTimeMillis() - start);
             } catch (Exception e) {
-                log.error("Failed to create link url={}", url, e);
+                log.error("Failed to create link", e);
                 ctx.status(500).result("Internal error");
                 requestMetrics.recordRequest("/link", 500, System.currentTimeMillis() - start);
             }
         });
+    }
+
+    private static String invalidCreationMessage(String url) {
+        if (!LinkService.isValidUrl(url)) {
+            return "La URL no es válida. Ingresa una dirección absoluta que comience con http:// o https:// y tenga un host.";
+        }
+        return "El alias no es válido o está reservado. Usa entre 1 y 64 letras, números, guiones o guiones bajos.";
     }
 }

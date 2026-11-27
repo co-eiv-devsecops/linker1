@@ -110,13 +110,13 @@ export default function () {
   // ── Redirection ────────────────────────────────────────────────────────
   const redirectById = http.get(`${BASE_URL}/${createdId}`, { redirects: 0 });
   check(redirectById, {
-    'GET /{id} is 301': (r) => r.status === 301,
+    'GET /{id} is 302': (r) => r.status === 302,
     'GET /{id} Location matches original url': (r) => r.headers['Location'] === createUrl,
   }) || fail('redirection: GET /{id} failed');
 
   const redirectByAlias = http.get(`${BASE_URL}/${aliasName}`, { redirects: 0 });
   check(redirectByAlias, {
-    'GET /{alias} is 301': (r) => r.status === 301,
+    'GET /{alias} is 302': (r) => r.status === 302,
     'GET /{alias} Location matches aliased url': (r) => r.headers['Location'] === aliasUrl,
   }) || fail('redirection: GET /{alias} failed');
 

@@ -225,6 +225,29 @@
             },
             "url": "{{baseUrl}}/link"
           }
+        },
+        {
+          "name": "POST /link with reserved healthz alias returns 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 400', () => pm.response.to.have.status(400));",
+                  "pm.test('response explains that the alias is reserved', () => pm.expect(pm.response.text()).to.include('reservado'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"url\":\"https://healthz-postman.example.com\",\"alias\":\"healthz\"}"
+            },
+            "url": "{{baseUrl}}/link"
+          }
         }
       ]
     },
@@ -232,13 +255,13 @@
       "name": "Redirection",
       "item": [
         {
-          "name": "GET /{id} redirects to the stored url (301)",
+          "name": "GET /{id} redirects to the stored url (302)",
           "event": [
             {
               "listen": "test",
               "script": {
                 "exec": [
-                  "pm.test('status is 301', () => pm.response.to.have.status(301));",
+                  "pm.test('status is 302', () => pm.response.to.have.status(302));",
                   "pm.test('Location matches the original url', () => pm.expect(pm.response.headers.get('Location')).to.eql(pm.collectionVariables.get('createUrl')));"
                 ]
               }
@@ -253,13 +276,13 @@
           }
         },
         {
-          "name": "GET /{alias} redirects to the stored url (301)",
+          "name": "GET /{alias} redirects to the stored url (302)",
           "event": [
             {
               "listen": "test",
               "script": {
                 "exec": [
-                  "pm.test('status is 301', () => pm.response.to.have.status(301));",
+                  "pm.test('status is 302', () => pm.response.to.have.status(302));",
                   "pm.test('Location matches the aliased url', () => pm.expect(pm.response.headers.get('Location')).to.eql(pm.collectionVariables.get('aliasUrl')));"
                 ]
               }
@@ -387,6 +410,28 @@
             "method": "DELETE",
             "url": "{{baseUrl}}/{{unknownId}}"
           }
+        }
+      ]
+    },
+    {
+      "name": "Stats",
+      "item": [
+        {
+          "name": "GET /link/{id}/stats returns the click count",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('status is 200', () => pm.response.to.have.status(200));",
+            "const body = pm.response.json();",
+            "pm.test('id matches', () => pm.expect(body.id).to.eql(pm.collectionVariables.get('createdId')));",
+            "pm.test('clicks is a non-negative integer', () => pm.expect(body.clicks).to.be.a('number').and.at.least(0));"
+          ] } }],
+          "request": { "method": "GET", "url": "{{baseUrl}}/link/{{createdId}}/stats" }
+        },
+        {
+          "name": "GET /link/{unknown-id}/stats returns 404",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('status is 404', () => pm.response.to.have.status(404));"
+          ] } }],
+          "request": { "method": "GET", "url": "{{baseUrl}}/link/newman-missing-stats/stats" }
         }
       ]
     }

@@ -41,9 +41,8 @@ public class LinkSpans {
      * Traces link creation as a parent "link.create" span containing a child
      * "link.create.persist" span around the actual repository/service call.
      */
-    public <T, E extends Exception> T traceCreate(String url, ThrowingSupplier<T, E> persistWork) throws E {
+    public <T, E extends Exception> T traceCreate(ThrowingSupplier<T, E> persistWork) throws E {
         Span parent = tracer.spanBuilder("link.create")
-                .setAttribute("link.url", url)
                 .startSpan();
         try (Scope parentScope = parent.makeCurrent()) {
             return runChildSpan("link.create.persist", "create", persistWork, parent);

@@ -7,7 +7,10 @@ import java.util.UUID;
 
 public class LinkService {
 
-    private static final Set<String> RESERVED_ALIASES = Set.of("link", "app.js", "styles.css");
+    // Keep in sync with exact routes registered by StaticRoutes, HealthRoutes
+    // and LinkRoutes. A dynamic /{id} must never shadow one of these paths.
+    private static final Set<String> RESERVED_ALIASES = Set.of(
+            "link", "app.js", "styles.css", "healthz");
 
     private final LinkRepository repository;
 
@@ -29,7 +32,7 @@ public class LinkService {
 
     public CreateResult createResult(String url) throws SQLException {
         if (!isValidUrl(url)) {
-            throw new IllegalArgumentException("Invalid URL: " + url);
+            throw new IllegalArgumentException("Invalid URL");
         }
 
         var existingId = repository.findIdByUrl(url);
@@ -43,7 +46,7 @@ public class LinkService {
 
     public Link create(String url, String alias) throws SQLException {
         if (!isValidUrl(url)) {
-            throw new IllegalArgumentException("Invalid URL: " + url);
+            throw new IllegalArgumentException("Invalid URL");
         }
 
         if (alias == null) {
@@ -51,7 +54,7 @@ public class LinkService {
         }
 
         if (!isValidAlias(alias)) {
-            throw new IllegalArgumentException("Invalid alias: " + alias);
+            throw new IllegalArgumentException("Invalid alias");
         }
 
         var existingUrlForAlias = repository.findUrlById(alias);
@@ -71,7 +74,14 @@ public class LinkService {
 
     public static boolean isValidUrl(String url) {
         try {
-            return new URI(url).isAbsolute();
+            var uri = new URI(url);
+            var scheme = uri.getScheme();
+            return uri.isAbsolute()
+                    && scheme != null
+                    && (scheme.equalsIgnoreCase("http") || scheme.equalsIgnoreCase("https"))
+                    && uri.getHost() != null
+                    && !uri.getHost().isBlank()
+                    && uri.getPort() <= 65535;
         } catch (Exception e) {
             return false;
         }
@@ -84,7 +94,19 @@ public class LinkService {
         if (!alias.matches("[A-Za-z0-9_-]+")) {
             return false;
         }
-        return !RESERVED_ALIASES.contains(alias);
+        return !RESERVED_ALIASES.contains(alias.toLowerCase(java.util.Locale.ROOT));
+    }
+
+    /** Resuelve el enlace para una redirección y cuenta la apertura. null si no existe. */
+    public String open(String id) throws SQLException {
+        if (!repository.incrementClicks(id)) {
+            return null;
+        }
+        return repository.findUrlById(id);
+    }
+
+    public Long getClicks(String id) throws SQLException {
+        return repository.findClicksById(id);
     }
 
     public static String generateId() {

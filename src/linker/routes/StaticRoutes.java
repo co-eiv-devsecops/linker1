@@ -4,6 +4,7 @@ import io.javalin.Javalin;
 import linker.config.FeatureFlags;
 
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.function.Function;
 
 public final class StaticRoutes {
@@ -38,11 +39,15 @@ public final class StaticRoutes {
         try {
             var stream = resourceLoader.apply(resource);
             if (stream != null) {
-                var content = new String(stream.readAllBytes());
+                var content = new String(stream.readAllBytes(), StandardCharsets.UTF_8);
                 if (contentType.equals("text/html")) {
                     ctx.html(content);
                 } else {
-                    ctx.contentType(contentType).result(content);
+                    // Without an explicit charset the server encodes the body as
+                    // ISO-8859-1 and accented characters (e.g. "ó") reach the browser
+                    // as invalid UTF-8 (shown as "?"). Send explicit UTF-8 bytes.
+                    ctx.contentType(contentType + "; charset=utf-8")
+                        .result(content.getBytes(StandardCharsets.UTF_8));
                 }
             } else {
                 ctx.status(404).result(notFoundMessage);

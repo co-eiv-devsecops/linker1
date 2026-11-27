@@ -20,6 +20,7 @@ class LinkRepositoryTest {
             stmt.execute("CREATE TABLE shorturl (id TEXT PRIMARY KEY, url TEXT)");
         }
         repo = new LinkRepository(conn);
+        repo.ensureClicksColumn();
     }
 
     @Test
@@ -114,5 +115,46 @@ class LinkRepositoryTest {
     void deleteThrowsExceptionWhenConnectionClosed() throws SQLException {
         conn.close();
         assertThrows(SQLException.class, () -> repo.delete("id"));
+    }
+
+    @Test
+    void ensureClicksColumnMigratesLegacyTableKeepingRows() throws SQLException {
+        try (var stmt = conn.createStatement()) {
+            stmt.execute("DROP TABLE shorturl");
+            stmt.execute("CREATE TABLE shorturl (id TEXT PRIMARY KEY, url TEXT)");
+            stmt.execute("INSERT INTO shorturl (id, url) VALUES ('legacy01', 'https://example.com')");
+        }
+
+        repo.ensureClicksColumn();
+
+        assertEquals("https://example.com", repo.findUrlById("legacy01"));
+        assertEquals(0L, (long) repo.findClicksById("legacy01"));
+    }
+
+    @Test
+    void ensureClicksColumnIsIdempotent() throws SQLException {
+        repo.ensureClicksColumn();
+        repo.ensureClicksColumn();
+        assertEquals(0L, (long) repo.findClicksById(repo.insertShortUrl("https://example.com")));
+    }
+
+    @Test
+    void incrementClicksAddsOnePerCallAndReturnsTrue() throws SQLException {
+        var id = repo.insertShortUrl("https://example.com");
+
+        assertTrue(repo.incrementClicks(id));
+        assertTrue(repo.incrementClicks(id));
+
+        assertEquals(2L, (long) repo.findClicksById(id));
+    }
+
+    @Test
+    void incrementClicksReturnsFalseWhenIdMissing() throws SQLException {
+        assertFalse(repo.incrementClicks("missing1"));
+    }
+
+    @Test
+    void findClicksByIdReturnsNullWhenIdMissing() throws SQLException {
+        assertNull(repo.findClicksById("missing1"));
     }
 }

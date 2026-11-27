@@ -33,13 +33,15 @@ class LinkSpansTest {
 
     @Test
     void traceCreateProducesParentAndChildSpans() {
-        var result = linkSpans.traceCreate("https://example.com", () -> "abc123");
+        var result = linkSpans.traceCreate(() -> "abc123");
 
         assertEquals("abc123", result);
         var spans = spanExporter.getFinishedSpanItems();
         assertEquals(2, spans.size());
         assertTrue(spans.stream().anyMatch(s -> s.getName().equals("link.create")));
         assertTrue(spans.stream().anyMatch(s -> s.getName().equals("link.create.persist")));
+        assertTrue(spans.stream().allMatch(s -> !s.getAttributes().asMap().containsKey(
+                io.opentelemetry.api.common.AttributeKey.stringKey("link.url"))));
     }
 
     @Test
@@ -55,7 +57,7 @@ class LinkSpansTest {
 
     @Test
     void traceCreateRecordsDbOperationDurationHistogram() {
-        linkSpans.traceCreate("https://example.com", () -> "abc123");
+        linkSpans.traceCreate(() -> "abc123");
 
         var metric = metricReader.collectAllMetrics().stream()
                 .filter(m -> m.getName().equals("linker.db.operation.duration"))

@@ -70,10 +70,12 @@ final class LambdaComposition {
 
     private static Connection sqliteFallback() {
         try {
+            // Same fat-jar driver-registration merge issue as Main.java.
+            Class.forName("org.sqlite.JDBC");
             // /tmp is the only writable path in the Lambda execution
             // environment; sqlite-jdbc also extracts its native library there.
             return DriverManager.getConnection("jdbc:sqlite:/tmp/linker1.db");
-        } catch (SQLException e) {
+        } catch (ClassNotFoundException | SQLException e) {
             throw new IllegalStateException("Failed to initialize SQLite-backed LinkService for Lambda", e);
         }
     }

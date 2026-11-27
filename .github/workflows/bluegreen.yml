@@ -18,10 +18,9 @@ name: Blue/Green Deployment
 # All other secrets/variables (OCI_CLI_*, LD_SDK_KEY, MYSQL_*, OTEL_*) are
 # already configured for pipeline.yml and are reused here without changes.
 
+# Manual only: this OCI pipeline needs OCI secrets that forks do not have.
+# The AWS equivalent is bluegreen-aws.yml.
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 # Serialise blue/green runs on the same branch — never cancel mid-deploy.

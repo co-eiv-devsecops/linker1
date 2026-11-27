@@ -23,7 +23,9 @@ class LinkServiceTest {
             stmt.execute("CREATE TABLE shorturl (id TEXT PRIMARY KEY, url TEXT)");
         }
         repo = new LinkRepository(conn);
+        repo.ensureClicksColumn();
         service = new LinkService(repo);
+
     }
 
     @Nested
@@ -142,8 +144,23 @@ class LinkServiceTest {
         }
 
         @Test
-        void returnsTrueForFtpUrl() {
-            assertTrue(LinkService.isValidUrl("ftp://files.example.com"));
+        void rejectsSchemesOtherThanHttpAndHttps() {
+            assertFalse(LinkService.isValidUrl("ftp://files.example.com"));
+            assertFalse(LinkService.isValidUrl("javascript:alert(1)"));
+            assertFalse(LinkService.isValidUrl("data:text/html,hello"));
+            assertFalse(LinkService.isValidUrl("file:///etc/passwd"));
+        }
+
+        @Test
+        void rejectsHttpUrisWithoutAValidHost() {
+            assertFalse(LinkService.isValidUrl("https:///missing-host"));
+            assertFalse(LinkService.isValidUrl("http://example.com:99999/path"));
+        }
+
+        @Test
+        void acceptsSchemeCaseInsensitively() {
+            assertTrue(LinkService.isValidUrl("HTTPS://example.com/path"));
+            assertTrue(LinkService.isValidUrl("HtTp://example.com/path"));
         }
     }
 
@@ -169,5 +186,26 @@ class LinkServiceTest {
             var id = LinkService.generateId();
             assertTrue(id.matches("[a-f0-9]+"), "Expected hex characters, got: " + id);
         }
+    }
+
+    @Test
+    void openReturnsUrlAndCountsTheOpening() throws SQLException {
+        var link = service.create("https://example.com");
+
+        assertEquals("https://example.com", service.open(link.id()));
+        assertEquals(1L, (long) service.getClicks(link.id()));
+    }
+
+    @Test
+    void openReturnsNullForUnknownId() throws SQLException {
+        assertNull(service.open("missing1"));
+        assertNull(service.getClicks("missing1"));
+    }
+
+    @Test
+    void getDoesNotCountOpenings() throws SQLException {
+        var link = service.create("https://example.com");
+        service.get(link.id());
+        assertEquals(0L, (long) service.getClicks(link.id()));
     }
 }

@@ -3,12 +3,12 @@ name: CI
 on:
   push:
     branches:
-      - DEV
+      - develop
       - main
       - master
   pull_request:
     branches:
-      - DEV
+      - develop
       - main
       - master
 
@@ -51,10 +51,14 @@ jobs:
     name: Tests
     runs-on: ubuntu-latest
     needs: build
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
@@ -71,6 +75,16 @@ jobs:
 
       - name: Check coverage threshold
         run: mvn -B -ntp verify -DskipTests
+
+      - name: SonarCloud analysis (with JaCoCo coverage)
+        # Skipped when SONAR_TOKEN is unavailable (e.g. PRs from forks).
+        if: ${{ env.SONAR_TOKEN != '' }}
+        run: >
+          mvn -B -ntp org.sonarsource.scanner.maven:sonar-maven-plugin:sonar
+          -Dsonar.host.url=https://sonarcloud.io
+          -Dsonar.organization=anderfg13
+          -Dsonar.projectKey=Anderfg13_linker1
+          -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml
 
       - name: Upload coverage report
         if: always()
@@ -113,6 +127,86 @@ jobs:
           path: |
             target/linker1-1.0-jar-with-dependencies.jar
             target/linker1
+
+  # SCA (OWASP Dependency-Check) -- lab: https://eci-arcn.github.io/Labs/sca-dependency-check/
+  # Skipped (green) until the NVD_API_KEY secret exists; see docs/SCA.md.
+  dependency-check:
+    name: Dependency Check (SCA)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    env:
+      NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+    steps:
+      - name: Skip notice
+        if: env.NVD_API_KEY == ''
+        run: echo "::notice::NVD_API_KEY is not set, skipping Dependency-Check (see docs/SCA.md)."
+
+      - name: Checkout repository
+        if: env.NVD_API_KEY != ''
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        if: env.NVD_API_KEY != ''
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Today's date (NVD cache key)
+        if: env.NVD_API_KEY != ''
+        id: date
+        run: echo "day=$(date +%F)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore NVD cache
+        if: env.NVD_API_KEY != ''
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.dependency-check-data
+          key: nvd-${{ steps.date.outputs.day }}
+          restore-keys: nvd-
+
+      # Maven Central sometimes answers 429 (Too Many Requests) when downloading the
+      # plugin. Retry only for that kind of download failure; a real vulnerability
+      # finding (CVSS >= 7) fails immediately.
+      - name: Run Dependency-Check
+        if: env.NVD_API_KEY != ''
+        run: |
+          for attempt in 1 2 3 4; do
+            if mvn -B -ntp org.owasp:dependency-check-maven:13.0.0:check 2>&1 | tee dc.log; then
+              exit 0
+            fi
+            if grep -qE "status code: 429|Could not transfer artifact|could not be resolved" dc.log && [ "$attempt" -lt 4 ]; then
+              echo "::warning::Maven Central download failed (attempt $attempt/4); retrying in $((attempt * 30))s"
+              sleep $((attempt * 30))
+            else
+              exit 1
+            fi
+          done
+
+      - name: Save NVD cache
+        if: always() && env.NVD_API_KEY != ''
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.dependency-check-data
+          key: nvd-${{ steps.date.outputs.day }}
+
+      - name: Upload SARIF to Code scanning
+        if: always() && env.NVD_API_KEY != '' && hashFiles('target/dependency-check-report.sarif') != ''
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: target/dependency-check-report.sarif
+          category: dependency-check
+
+      - name: Upload HTML report
+        if: always() && env.NVD_API_KEY != '' && hashFiles('target/dependency-check-report.html') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-check-report
+          path: target/dependency-check-report.html
 
   summary:
     name: Summary
@@ -157,14 +251,29 @@ jobs:
 
       - name: Start app
         env:
-          LD_SDK_KEY: ${{ secrets.LD_SDK_KEY }}
+          LD_SDK_KEY: ci-offline
+          LD_OFFLINE: "true"
         run: |
+          set -e
           chmod +x linker1
-          LINKER_PORT=8080 ./linker1 &
+          LINKER_PORT=8080 ./linker1 > app.log 2>&1 &
+          APP_PID=$!
           for i in $(seq 1 20); do
-            curl -sf http://localhost:8080/ > /dev/null && break
+            if curl -fsS http://localhost:8080/ > /dev/null; then
+              echo "Linker1 is ready on port 8080"
+              exit 0
+            fi
+            if ! kill -0 "$APP_PID" 2>/dev/null; then
+              echo "Linker1 exited before becoming ready; startup log follows:"
+              cat app.log
+              exit 1
+            fi
             sleep 1
           done
+          echo "Linker1 did not become ready within 20 seconds; startup log follows:"
+          cat app.log
+          kill "$APP_PID" 2>/dev/null || true
+          exit 1
 
       - name: Smoke test static routes
         run: |
@@ -179,7 +288,7 @@ jobs:
             -d '{"url":"https://example.com"}')
           echo "Created id: $ID"
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/$ID)
-          test "$STATUS" = "301"
+          test "$STATUS" = "302"
           LOCATION=$(curl -s -D - -o /dev/null http://localhost:8080/$ID | grep -i '^location:' | tr -d '\r')
           echo "$LOCATION" | grep -q "https://example.com"
 
@@ -189,7 +298,7 @@ jobs:
             -H "Content-Type: application/json" \
             -d '{"url":"https://example.org","alias":"ci-smoke-alias"}' > /dev/null
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/ci-smoke-alias)
-          test "$STATUS" = "301"
+          test "$STATUS" = "302"
           CONFLICT_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8080/link \
             -H "Content-Type: application/json" \
             -d '{"url":"https://other.example.org","alias":"ci-smoke-alias"}')
@@ -203,7 +312,10 @@ jobs:
   api-tests:
     name: API Tests (Live)
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/DEV' )
+    # Runs only when the repository variable LIVE_BASE_URL is set (for example
+    # http://<alb>.us-east-1.elb.amazonaws.com), so forks without a live
+    # deployment are not blocked by a URL they do not own.
+    if: github.event_name == 'push' && vars.LIVE_BASE_URL != '' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/DEV' )
 
     steps:
       - name: Checkout repository
@@ -212,7 +324,7 @@ jobs:
       - name: Run Newman against the live instance
         run: |
           npx --yes newman run postman/linker1.postman_collection.json \
-            --env-var "baseUrl=https://1.n-la-c.app" \
+            --env-var "baseUrl=${{ vars.LIVE_BASE_URL }}" \
             --reporters cli,junit --reporter-junit-export newman-report.xml
 
       - name: Upload Newman report

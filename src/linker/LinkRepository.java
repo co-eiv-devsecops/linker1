@@ -61,4 +61,33 @@ public class LinkRepository {
             return ps.executeUpdate() > 0;
         }
     }
+
+    /** Migración idempotente: agrega clicks a bases creadas antes de esta HU. */
+    public void ensureClicksColumn() throws SQLException {
+        try (var rs = conn.getMetaData().getColumns(null, null, "shorturl", "clicks")) {
+            if (rs.next()) {
+                return;
+            }
+        }
+        try (var stmt = conn.createStatement()) {
+            stmt.execute("ALTER TABLE shorturl ADD COLUMN clicks INTEGER NOT NULL DEFAULT 0");
+        }
+    }
+
+    /** Suma una apertura en SQL (atómico). Devuelve false si el id no existe. */
+    public boolean incrementClicks(String id) throws SQLException {
+        try (var ps = conn.prepareStatement("UPDATE shorturl SET clicks = clicks + 1 WHERE id = ?")) {
+            ps.setString(1, id);
+            return ps.executeUpdate() > 0;
+        }
+    }
+
+    /** Devuelve el conteo, o null si el id no existe (null != 0). */
+    public Long findClicksById(String id) throws SQLException {
+        try (var ps = conn.prepareStatement("SELECT clicks FROM shorturl WHERE id = ?")) {
+            ps.setString(1, id);
+            var rs = ps.executeQuery();
+            return rs.next() ? rs.getLong("clicks") : null;
+        }
+    }
 }

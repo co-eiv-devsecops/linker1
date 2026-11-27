@@ -18,10 +18,20 @@ Linker1 is a web application that lets you:
 ## API
 
 - `POST /link` — Creates a short link. JSON body: `{"url": "https://..."}`. If the URL already existed, responds `200` with the same code; if it's new, responds `201`.
-  - Custom alias (optional): `{"url": "https://...", "alias": "my-alias"}`. Alias rules: letters, numbers, hyphen (`-`), and underscore (`_`) only, between 1 and 64 characters, no spaces. If the alias is already taken by another URL, responds `409`; if the alias is invalid, responds `400`.
-- `GET /{id}` — Redirects (`301`) to the URL associated with the short code or alias. Responds `404` if it doesn't exist.
-- `HEAD /{id}` — Resolves a short link. Responds `200` with the real URL in the response body if found (without redirecting), or `404` if not.
+  - Destinations must be absolute HTTP or HTTPS URLs with a valid host. Other schemes, relative URLs, and URLs without a host respond `400` and are not stored.
+  - Custom alias (optional): `{"url": "https://...", "alias": "my-alias"}`. Alias rules: letters, numbers, hyphen (`-`), and underscore (`_`) only, between 1 and 64 characters, no spaces. `link`, `healthz`, `app.js`, and `styles.css` are reserved. If the alias is already taken by another URL, responds `409`; if the alias is invalid or reserved, responds `400`.
+  - Creation validation errors are returned in Spanish without echoing the submitted URL or alias. See [secure link creation](docs/SECURE_LINKS.md) for the API contract, security boundaries, and local examples.
+- `GET /{id}` — Redirects (`302`, with `Cache-Control: no-store`) to the URL associated with the short code or alias, and counts one opening. Responds `404` if it doesn't exist. The redirect is temporary and uncacheable on purpose, so every visit reaches the server and is counted.
+- `HEAD /{id}` — Resolves a short link. Responds `200` with the real URL in the response body if found (without redirecting), or `404` if not Does not count as an opening.
 - `DELETE /{id}` — Deletes a short link. Responds `204` on success, or `404` if the short code or alias doesn't exist.
+- `GET /link/{id}/stats` — Returns `200` with `{"id":"...","clicks":N}`, or `404` if the link doesn't exist. Does not count as an opening.
+
+## Running and deploying
+
+- Local run without private credentials: [`docs/QUICKSTART.md`](docs/QUICKSTART.md).
+- Blue/green deployment on AWS (this fork): [`docs/DEPLOYMENT_AWS.md`](docs/DEPLOYMENT_AWS.md). The original Oracle Cloud pipeline is described in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
+- Dependency vulnerability scan (OWASP Dependency-Check): [`docs/SCA.md`](docs/SCA.md).
+- Process evidence for the course (Lean metrics, traceability, operations): [`docs/proceso/`](docs/proceso/README.md).
 
 ## Course Deliverables (final assignment)
 
@@ -32,7 +42,7 @@ Status of every item from the final assignment ("La nube aplicación céntrica")
 | **Redeploy: blue/green + ephemeral test environment** | ✅ Done | [`bluegreen.yml`](.github/workflows/bluegreen.yml) provisions a green VM, runs a k6 functional suite against it directly (24 checks: static assets, CRUD, alias, redirect, HEAD, DELETE) *before* it ever reaches the load balancer, then health-checks → A/B splits (90/10) → promotes → retires the old VM. A failing test or health check destroys the green VM without it ever taking production traffic. See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md#switchover-runbook-issue-72). |
 | **Grafana post-deploy monitoring** | ✅ Dashboard + docs done · ⚠️ Bonus automated check scaffolded, not live | Dashboard at [`docs/grafana/linker1-dashboard.json`](docs/grafana/linker1-dashboard.json), navigation/panel guide in [`docs/MONITORING.md`](docs/MONITORING.md). The post-deploy Grafana-query check (`scripts/check-grafana-metrics.sh`) is wired into the pipeline but degrades to a warning — the Grafana Cloud API key it needs requires org-admin on the shared course Grafana account, which nobody on the team has (confirmed, not assumed). |
 | **Feature launch via a separate pipeline** | ✅ Done | [`feature-launch.yml`](.github/workflows/feature-launch.yml) is a standalone `workflow_dispatch` workflow that toggles a LaunchDarkly flag via its REST API directly — no build or deploy job runs. Genuinely decoupled from `bluegreen.yml`/`pipeline.yml`. |
-| **New endpoints: `HEAD /{id}`, `DELETE /{id}`** | ✅ API done · ⚠️ No UI control for DELETE | Implemented in [`LinkRoutes.java`](src/linker/routes/LinkRoutes.java), fully unit- and k6-tested. The web UI doesn't expose a "delete this link" button — the assignment's metadata/delete requirement is satisfied at the API level (see [API](#api) above), not yet surfaced in `public/`. |
+| **Link resolution and deletion: `HEAD /{id}`, `DELETE /{id}`** | ✅ API and UI available | Implemented in [`LinkRoutes.java`](src/linker/routes/LinkRoutes.java); the UI exposes copy and delete controls. Deletion currently has no owner token, a separate management-security gap documented in [secure link creation](docs/SECURE_LINKS.md). |
 | **Operations documentation** | ✅ Done | Wiki [Onboarding](https://github.com/co-eiv-devsecops/linker1/wiki/Onboarding) page covers first-day setup, scripts, and an audited "0 manual OCI console operations" table. Grafana navigation in [`docs/MONITORING.md`](docs/MONITORING.md). |
 | **12-factor audit + cloud operating model wiki** | ✅ Done | Wiki: [12-Factor App](https://github.com/co-eiv-devsecops/linker1/wiki/12%E2%80%90Factor-App), [Cloud Architecture](https://github.com/co-eiv-devsecops/linker1/wiki/Cloud-Architecture), [DevSecOps Practices](https://github.com/co-eiv-devsecops/linker1/wiki/DevSecOps-Practices). |
 | **Fictitious postmortems** | ✅ Done (5) | Wiki: [Postmortems](https://github.com/co-eiv-devsecops/linker1/wiki/Postmortems) — modeled on this repo's own real incidents (OTLP protocol mismatch, systemd `%`-escaping, empty-env-var startup crash, branch-protection misconfiguration, JDBC driver SPI collision). |
@@ -374,8 +384,6 @@ See [`.github/CONTRIBUTING.md`](.github/CONTRIBUTING.md) for the full workflow, 
 
 ## Team
 
-- ANDERSSON DAVID SÁNCHEZ MÉNDEZ
-- ANDERSON FABIAN GARCIA NIETO
-- DANIEL PATIÑO MEJIA
-- ESTEBAN AGUILERA CONTRERAS
-- JUAN JOSE DIAZ GOMEZ
+- Santiago Gualdrón Rincón
+- Anderson Fabian García Nieto
+- Natalia Espitia Espinel

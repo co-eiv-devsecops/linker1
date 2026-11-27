@@ -117,7 +117,7 @@ public class LinkLambdaHandler implements RequestHandler<APIGatewayProxyRequestE
             url = (String) body.get("url");
             alias = (String) body.get("alias");
         } catch (Exception e) {
-            return response(400, "Invalid JSON");
+            return response(400, "El cuerpo de la solicitud no contiene un JSON válido.");
         }
 
         try {
@@ -128,9 +128,12 @@ public class LinkLambdaHandler implements RequestHandler<APIGatewayProxyRequestE
             LinkService.CreateResult result = service.createResult(url);
             return result.created() ? created(result.link().id()) : ok(result.link().id());
         } catch (AliasConflictException e) {
-            return response(409, e.getMessage());
+            return response(409, "El alias no está disponible. Elige otro.");
         } catch (IllegalArgumentException e) {
-            return response(400, e.getMessage());
+            if (!LinkService.isValidUrl(url)) {
+                return response(400, "La URL no es válida. Ingresa una dirección absoluta que comience con http:// o https:// y tenga un host.");
+            }
+            return response(400, "El alias no es válido o está reservado. Usa entre 1 y 64 letras, números, guiones o guiones bajos.");
         }
     }
 

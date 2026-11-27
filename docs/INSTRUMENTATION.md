@@ -50,11 +50,13 @@ This records a request counter, an error counter (only incremented when `statusC
 ### `LinkSpans` — traces for the two user-facing operations
 
 ```java
-T result = linkSpans.traceCreate(url, () -> service.createResult(url));
+T result = linkSpans.traceCreate(() -> service.createResult(url));
 T result = linkSpans.traceResolve(id, () -> service.get(id));
 ```
 
 Each call produces one trace with two spans: a parent span for the whole operation (`link.create` / `link.resolve`) and a child span around the actual persistence/lookup call (`link.create.persist` / `link.resolve.lookup`). The child span's status is set to `ERROR` (with the exception recorded) if the wrapped call throws, and that failure propagates up to the parent span's status too. The unit of work is a `ThrowingSupplier<T, E>` — a `Supplier`-like functional interface that's allowed to throw a checked exception, since `LinkService`'s methods throw `SQLException`.
+
+Creation traces intentionally omit the destination URL. URLs may include private query parameters, so they are not recorded as span attributes or application log fields.
 
 The duration of that child span is also recorded in the `linker.db.operation.duration` histogram (tagged with an `operation` attribute of `create` or `resolve`), so `LinkSpans` needs both a `Tracer` and a `Meter` injected via its constructor.
 

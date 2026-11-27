@@ -90,4 +90,13 @@ class LinkRoutesErrorHandlingTest {
         assertEquals(500, response.statusCode());
         assertEquals("Internal error", response.body());
     }
+
+    @Test
+    void statsReturns500WhenRepositoryThrowsUnexpectedly() throws Exception {
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/link/anything/stats")).GET().build();
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(500, response.statusCode());
+        assertEquals("Internal error", response.body());
+    }
 }

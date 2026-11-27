@@ -7,10 +7,12 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.io.ByteArrayInputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 
 class StaticRoutesTest {
 
@@ -43,6 +45,9 @@ class StaticRoutesTest {
 
         assertEquals(200, response.statusCode());
         assertTrue(response.body().contains("<html"));
+        assertTrue(response.body().contains("lang=\"es\""));
+        assertTrue(response.body().contains("Dirección web de destino"));
+        assertTrue(response.body().contains("novalidate"));
     }
 
     @Test
@@ -94,6 +99,25 @@ class StaticRoutesTest {
             assertEquals("app.js not found", response.body());
         } finally {
             missingResourceApp.stop();
+        }
+    }
+
+    @Test
+    void appJsKeepsAccentedCharactersAsUtf8() throws Exception {
+        var accentedApp = Javalin.create().start(0);
+        try {
+            var text = "Selecciónalo y cópialo manualmente";
+            new StaticRoutes(disabledFlags,
+                resource -> new ByteArrayInputStream(text.getBytes(StandardCharsets.UTF_8))).register(accentedApp);
+
+            var request = HttpRequest.newBuilder(
+                URI.create("http://localhost:" + accentedApp.port() + "/app.js")).GET().build();
+            var response = client.send(request, HttpResponse.BodyHandlers.ofByteArray());
+
+            assertTrue(response.headers().firstValue("Content-Type").orElse("").toLowerCase().contains("utf-8"));
+            assertEquals(text, new String(response.body(), StandardCharsets.UTF_8));
+        } finally {
+            accentedApp.stop();
         }
     }
 
@@ -150,7 +174,9 @@ class StaticRoutesTest {
             var response = client.send(request, HttpResponse.BodyHandlers.ofString());
 
             assertEquals(200, response.statusCode());
-            assertTrue(response.body().contains("Colombia Edition"));
+            assertTrue(response.body().contains("lang=\"es\""));
+            assertTrue(response.body().contains("Dirección web de destino"));
+            assertTrue(response.body().contains("novalidate"));
         } finally {
             appWithFlags.stop();
         }

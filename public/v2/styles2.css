@@ -141,6 +141,16 @@ label {
     color: var(--muted);
 }
 
+.field-help {
+    margin: -6px 0 2px;
+    color: var(--muted);
+    font-size: 0.9rem;
+}
+
+.message-error {
+    color: #fca5a5;
+}
+
 .input-row {
     display: flex;
     gap: 12px;
